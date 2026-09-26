@@ -1,5 +1,7 @@
 //! Thin adapters around the official Android command-line tools.
 
+#![allow(clippy::result_large_err)]
+
 use std::path::PathBuf;
 
 use model::Error;

@@ -1,5 +1,7 @@
 //! Process execution primitives shared by tool drivers.
 
+#![allow(clippy::result_large_err)]
+
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use model::{Error, ErrorCode};

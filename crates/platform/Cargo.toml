@@ -7,4 +7,3 @@ rust-version.workspace = true
 
 [dependencies]
 model = { package = "avdkit-model", path = "../model" }
-serde.workspace = true

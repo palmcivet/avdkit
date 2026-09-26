@@ -11,4 +11,3 @@ drivers = { package = "avdkit-drivers", path = "../drivers" }
 model = { package = "avdkit-model", path = "../model" }
 platform = { package = "avdkit-platform", path = "../platform" }
 process = { package = "avdkit-process", path = "../process" }
-serde.workspace = true

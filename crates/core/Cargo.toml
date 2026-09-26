@@ -12,4 +12,7 @@ environment = { package = "avdkit-env", path = "../env" }
 model = { package = "avdkit-model", path = "../model" }
 platform = { package = "avdkit-platform", path = "../platform" }
 process = { package = "avdkit-process", path = "../process" }
-serde.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

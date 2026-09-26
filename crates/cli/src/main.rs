@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use kit::{Kit, KitConfig};
+use kit::{Envelope, Kit, KitConfig};
 
 #[derive(Debug, Parser)]
 #[command(name = "avdkit", version, about = "Android virtual device management")]
@@ -17,22 +17,22 @@ enum Command {
     Refresh,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let kit = Kit::new(KitConfig::default())?;
 
     match cli.command.unwrap_or(Command::Environment) {
         Command::Environment => {
-            let report = kit.environment();
+            let report = kit.environment().await?;
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
+                println!("{}", serde_json::to_string_pretty(&Envelope::new(&report))?);
             } else {
                 println!(
                     "host: {:?} {:?}",
-                    report.snapshot.platform.host.platform,
-                    report.snapshot.platform.host.architecture
+                    report.snapshot.host.platform, report.snapshot.host.architecture
                 );
-                println!("sdk: {}", report.snapshot.platform.paths.sdk_root.display());
+                println!("sdk: {}", report.snapshot.paths.sdk_root.display());
                 for tool in report.snapshot.tools {
                     println!(
                         "{}: {}",
@@ -44,18 +44,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Command::Capabilities => {
+            let capabilities = kit.capabilities().await?;
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&kit.capabilities())?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&Envelope::new(&capabilities))?
+                );
             } else {
-                for capability in kit.capabilities() {
-                    println!("{}: {:?}", capability.operation, capability.state);
+                for capability in capabilities {
+                    println!("{}: {:?}", capability.id.as_str(), capability.state);
                 }
             }
         }
         Command::Refresh => {
-            kit.refresh()?;
+            let report = kit.refresh().await?;
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&kit.environment())?);
+                println!("{}", serde_json::to_string_pretty(&Envelope::new(&report))?);
             } else {
                 println!("environment refreshed");
             }

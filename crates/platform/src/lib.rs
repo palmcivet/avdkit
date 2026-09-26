@@ -5,35 +5,12 @@
 
 use std::path::PathBuf;
 
-use model::{CpuArchitecture, Host, Platform};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlatformPaths {
-    pub sdk_root: PathBuf,
-    pub avd_root: PathBuf,
-    pub data_root: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ToolNames {
-    pub android: String,
-    pub adb: String,
-    pub emulator: String,
-    pub sdkmanager: String,
-    pub avdmanager: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Description {
-    pub host: Host,
-    pub paths: PlatformPaths,
-    pub tools: ToolNames,
-}
+use model::{CpuArchitecture, Description, Host, Platform, PlatformPaths, ToolNames};
 
 pub fn describe() -> Description {
     let host = current_host();
     let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
 
