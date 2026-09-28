@@ -1,81 +1,193 @@
-- [公共 API](#公共-api)
-  - [创建与刷新](#创建与刷新)
-  - [先查询能力](#先查询能力)
-  - [三种操作形态](#三种操作形态)
-    - [查询](#查询)
-    - [长任务](#长任务)
-    - [计划](#计划)
-  - [数据与 JSON](#数据与-json)
-  - [错误](#错误)
-
 # 公共 API
 
-avdkit 的所有出口共用 `model` 中的公开类型和 `core` 提供的 `Kit` 门面。Rust API、命令行 JSON 和语言绑定边界因此共享同一套字段、错误码和能力语义。
+[上一章](01-policy.md)解释了能力、策略和预检。本章从调用方视角把它们组合起来：如何创建 `Kit`、判断功能是否可用、发起操作并处理稳定结果。
 
-## 创建与刷新
+## `Kit` 是唯一领域入口
 
-调用方通过 `KitConfig` 创建 `Kit`。创建过程会验证配置、探测一次本机环境，并生成不可变的环境快照和能力矩阵：
+Rust 调用方只需要依赖包 `avdkit`。`Kit` 持有配置和当前环境快照，并提供所有领域操作。
+
+最小调用流程：
 
 ```rust
+use avdkit::{Kit, KitConfig};
+
 let kit = Kit::new(KitConfig::default())?;
-let report = kit.environment().await?;
+
+let environment = kit.environment().await?;
+let capabilities = kit.capabilities().await?;
+let profiles = kit.profiles().await?;
 ```
 
-`Kit` 可以在线程间共享。环境发生变化后，调用 `refresh()` 会重新执行完整探测并整体替换快照；已经返回给调用方的旧报告不会被修改。
+创建 `Kit` 时会：
 
-`KitConfig` 当前支持覆盖 SDK 根目录。策略、工具偏好、超时和备份目录也已经进入公开模型，但除固定默认值外尚不可用。传入未支持的值会在创建 `Kit` 时立即返回结构化错误，不会静默忽略。策略的具体语义见[策略](01-policy.md)。
+1. 校验整份 `KitConfig`；
+2. 探测主机、路径和工具；
+3. 生成不可变环境快照；
+4. 从快照生成能力矩阵。
 
-## 先查询能力
+`Kit` 实现 `Send + Sync`，可以放入 `Arc` 后由多个异步任务共享。查询返回的数据是快照副本，后续刷新不会修改调用方已经持有的值。
 
-调用方可以在展示操作入口或执行操作前读取 `capabilities()`。能力矩阵覆盖所有已声明的操作和可选行为，每项能力有两种状态：
+## 环境快照
 
-- `available`：包含将被使用的实现名称。
-- `unavailable`：包含一个或多个原因，以及可能的补救方式。
+`environment()` 返回 `EnvironmentReport`，其中包含：
 
-稳定的原因码包括 `not_implemented`、`tool_not_found` 和 `platform_not_supported`。例如，一个操作可以同时因为当前平台未支持、缺少官方工具和实现尚未完成而不可用。调用方不需要从自然语言消息推断原因。
+- `snapshot.host`：平台、CPU 架构以及当前是否受支持；
+- `snapshot.paths`：SDK、Android 用户目录、AVD 目录和库数据目录；
+- `snapshot.tools`：每个官方工具的名称与发现路径；
+- `capabilities`：基于这份快照推导的能力矩阵。
 
-能力矩阵描述静态前提。设备是否正在运行、名称是否冲突等与本次请求有关的条件，由具体操作的预检负责。
+环境变量、PATH 或 SDK 内容变化后，调用：
+
+```rust
+let new_report = kit.refresh().await?;
+```
+
+`refresh()` 会完整重建快照和能力矩阵，不做局部修改。一次领域操作因此始终基于一份一致的环境描述。
+
+## 先查能力，再展示或调用操作
+
+`capabilities()` 返回所有已声明能力，而不只是当前可用项。每项状态是：
+
+- `available`：带实现名，例如 `android_cli`；
+- `unavailable`：带一个或多个结构化原因和可选补救方式。
+
+调用方可以直接根据原因码决定 UI 或自动化行为：
+
+```rust
+use avdkit::{CapabilityId, CapabilityState};
+
+let profile_capability = kit
+    .capabilities()
+    .await?
+    .into_iter()
+    .find(|item| item.id == CapabilityId::DevicesProfiles)
+    .expect("the matrix contains every declared capability");
+
+match profile_capability.state {
+    CapabilityState::Available { implementation } => {
+        println!("profiles use {implementation}");
+    }
+    CapabilityState::Unavailable { reasons } => {
+        for reason in reasons {
+            println!("{}: {}", reason.code.as_str(), reason.message);
+        }
+    }
+}
+```
+
+即使调用方没有预先查询，具体方法也会再次检查能力。因此能力查询适合产品展示和调度，但不是安全检查的替代品。
 
 ## 三种操作形态
 
-### 查询
+avdkit 根据操作的时间和副作用采用三种 API 形态。
 
-查询方法是异步方法，直接返回数据或 `Error`。环境、能力、SDK 包、设备、机型、运行实例和开机状态都使用这种形态。
+### 查询：直接返回数据
 
-### 长任务
-
-安装、删除、启动和停止等长任务立即返回 `Operation`。调用方通过三个入口管理任务：
+短查询是异步方法，返回 `Result<T, Error>`：
 
 ```rust
-operation.next_event().await;
-operation.cancel();
-operation.result().await;
+let profiles = kit.profiles().await?;
+for profile in profiles {
+    println!("{}", profile.id);
+}
 ```
 
-事件流用于进度、日志和警告；`result()` 只返回一次最终结果。取消、超时和能力不可用都会以稳定错误码结束任务。即使能力不可用，事件流和最终结果也会正常关闭，不会留下永远等待的句柄。
+环境、能力、SDK 包、设备、机型、运行实例和开机状态都采用这种形态。当前已真实执行的是环境、能力、刷新和预设机型查询。
 
-### 计划
+### 长任务：返回 `Operation`
 
-组合操作先把调用方的完整意图编译为可序列化的 `Plan`，再交给执行入口。计划包含有序步骤、步骤类型和补偿描述，适合在产生副作用前展示或记录。
+安装、删除、启动和停止可能持续数秒到数分钟，因此调用方法立即返回 `Operation`。调用方可以消费事件、发出取消并等待唯一的最终结果：
 
-当前的 `plan_create` 接受设备 ID、机型、系统镜像和显示名，并使用默认硬件配置。非默认硬件配置会明确返回 `capability_unavailable`，原因是 `not_implemented`。
+```rust
+let mut operation = kit.install(package_id);
 
-## 数据与 JSON
+while let Some(event) = operation.next_event().await {
+    println!("{event:?}");
+}
 
-公开模型都可以序列化。JSON 字段统一使用 `snake_case`，JSON 出口使用带 `schema_version` 的 `Envelope<T>` 包装完整响应。
+let result = operation.result().await?;
+```
 
-有些底层工具无法提供某个字段，而另一些字段只在特定状态下有意义。`Field<T>` 用带标签的三态值区分：
+`cancel()` 是幂等的：
 
-- 字段有值；
-- 当前实现不提供；
-- 字段对当前对象或状态不适用。
+```rust
+operation.cancel();
+```
 
-调用方不需要把缺失字段猜测为 `null`、空字符串或默认值。
+`Operation`、驱动和进程执行层使用同一种取消令牌；接入真实长任务后，取消会沿这条链路终止进程组，最终结果使用 `cancelled`。
 
-## 错误
+当前有副作用的长任务尚未接入真实驱动，因此公开入口还不会启动工具进程。调用这些入口会得到会正常结束的 `Operation`，最终错误为 `capability_unavailable`，不会无限等待。完整取消链路已经由独立 UniFFI 实验验证。
 
-所有出口共享 `Error`。其中包含稳定错误码、面向用户的消息、结构化原因、失败的计划步骤，以及可选的底层命令诊断信息。
+### 组合操作：先生成 `Plan`
 
-能力不可用使用 `capability_unavailable`；输入错误、预检失败、超时和取消分别使用自己的错误码。底层工具不一致的退出码和文本不会成为公共 API 的行为约定。
+创建设备需要安装检查、创建临时 AVD、改写配置和移动目录。此类意图先编译为 `Plan`：
 
-当前可执行的入口是环境探测、能力查询、环境刷新和创建计划编译。其他已声明入口会根据能力矩阵返回结构化的不可用结果。
+```rust
+let plan = kit.plan_create(draft)?;
+```
+
+`Plan` 是可序列化数据，包含：
+
+- 计划类型和稳定 ID；
+- 有序步骤；
+- 每步的类型与描述；
+- 可以执行的补偿动作。
+
+调用方可以在产生副作用前展示、记录或审批计划。当前创建计划可以编译，但 `execute_plan` 尚未执行真实步骤。自定义硬件配置会明确返回 `capability_unavailable`，而不是被忽略。
+
+## 可选字段不是 `null`
+
+不同工具能提供的信息不同。公共模型使用 `Field<T>` 表达三种情况：
+
+- `present`：字段有可靠值；
+- `unavailable`：当前实现或工具没有提供；
+- `inapplicable`：这个字段对当前对象或状态没有意义。
+
+例如，Android CLI 的预设机型命令只返回 ID，不返回显示名称：
+
+```json
+{
+  "id": "medium_phone",
+  "display_name": {
+    "state": "unavailable"
+  }
+}
+```
+
+调用方不需要猜测 `null`、空字符串或默认值分别代表什么。
+
+## 错误契约
+
+所有出口共享 `Error`。重要字段包括：
+
+- `code`：调用方应依赖的稳定错误码；
+- `message`：用于展示或日志；
+- `reasons`：能力不可用的结构化原因；
+- `failed_step`：组合计划失败的位置；
+- `diagnostic`：可选的底层命令、stdout、stderr 和退出状态。
+
+常见错误码：
+
+- `capability_unavailable`：平台、工具或实现不可用；
+- `invalid_input`：公开模型或参数无效；
+- `precondition_failed`、`name_conflict`：本次请求不满足条件；
+- `tool_output_unrecognized`：工具运行了，但输出不符合已知契约；
+- `timeout`、`cancelled`：执行没有正常完成；
+- `internal`：库内部或底层 I/O 失败。
+
+底层工具文本只进入诊断，不作为公共控制流。调用方应匹配 `code` 和 `reasons`。
+
+## JSON 与其他出口
+
+公开模型都可以序列化，字段统一使用 `snake_case`。CLI 的完整 JSON 响应使用：
+
+```json
+{
+  "schema_version": "0.1.0",
+  "data": {}
+}
+```
+
+`Envelope<T>` 的版本属于数据契约，不是 Android 工具版本。Rust API、CLI JSON 和 UniFFI 边界共用同一套 `model` 类型，因此不同出口不会重新定义字段和错误。
+
+下一章开始进入内部实现，先看所有工具驱动共同依赖的[进程执行层](03-process-execution.md)。

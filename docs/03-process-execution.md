@@ -1,51 +1,136 @@
-- [进程执行](#进程执行)
-  - [命令与结果](#命令与结果)
-  - [超时与取消](#超时与取消)
-  - [进程组](#进程组)
-  - [驱动接入](#驱动接入)
-
 # 进程执行
 
-工具驱动通过 `process` crate 运行外部命令，不直接创建子进程。统一入口负责参数、环境变量、工作目录、标准输入、输出捕获、超时和取消；驱动在此基础上解释各工具的成功与失败。
+[上一章](02-public-api.md)中的查询和长任务最终都会调用 Android 官方进程。本章沿调用链向下进入 `process` crate，说明 avdkit 如何拥有、取消和清理这些进程。
 
-## 命令与结果
+## 为什么单独做一层
 
-`CommandSpec` 描述一次调用：
+如果每个驱动直接使用 `tokio::process::Command`，很快会出现不同实现：
 
-- 可执行文件与参数；
-- 只为本次调用增加或覆盖的环境变量；
-- 可选工作目录；
-- 可选的固定标准输入。
+- 有的命令忘记超时；
+- 有的命令只杀直接子进程，留下下载器或 shell；
+- 有的命令继承意外的 stdin，进入交互等待；
+- 有的命令丢失 stderr，无法生成诊断；
+- Swift Task、`Operation` 和 Rust future 的取消语义无法衔接。
 
-标准输入缺省连接空设备。提供固定输入时，执行器写完后关闭管道。stdout 和 stderr 分开捕获，并按 UTF-8 容错转换为字符串。结果保留可选退出码：进程被信号终止时没有数字退出码。
+因此 `drivers` 只描述“要执行什么”，`process` 统一保证“怎样安全执行”。工具输出代表成功还是失败，仍由驱动判断。
 
-执行器不把非零退出码直接翻译为领域错误。不同 Android 工具的退出码语义不一致，尤其 Android CLI 在已知失败时也可能返回 0；成功特征和错误分类属于驱动。
+## 一次调用的生命周期
 
-## 超时与取消
+普通工具调用经历：
 
-`Runner` 提供普通、指定超时、可取消以及可取消并指定超时四种执行入口。默认超时由 `Runner` 持有。
+```text
+CommandSpec
+  → 检查是否已经取消
+  → 创建独立进程组
+  → 写入固定 stdin 或连接空设备
+  → 同时等待进程、超时或取消
+  → 捕获 stdout / stderr / 终止状态
+  → 正常退出时解除进程组保护
+```
 
-`CancellationToken` 可以克隆，并具有以下语义：
+超时、取消或调用 future 被丢弃时，进程组保护器负责终止本次调用拥有的整个进程组。
 
-- `cancel()` 幂等；
-- 取消状态一旦设置便不会恢复；
-- 在执行前已经取消时，不启动子进程；
-- 执行期间取消时，返回稳定错误码 `cancelled`。
+## `CommandSpec`
 
-超时返回 `timeout`。启动文件不存在返回 `tool_not_found`；其他启动或等待错误返回 `internal`。错误消息保留底层 I/O 信息，但调用方应依赖稳定错误码。
+`CommandSpec` 是驱动和执行器之间的中性描述：
 
-`core::Operation.cancel()` 使用同一种取消令牌，因此语言绑定、领域长任务和工具执行可以组成一条取消链路。
+```rust
+use std::path::PathBuf;
+use avdkit_process::CommandSpec;
 
-## 进程组
+let spec = CommandSpec {
+    program: PathBuf::from("/path/to/adb"),
+    args: vec!["devices".into(), "-l".into()],
+    environment: [
+        ("ANDROID_SDK_ROOT".into(), "/path/to/sdk".into()),
+    ]
+    .into(),
+    current_dir: None,
+    stdin: None,
+};
+```
 
-普通工具调用由执行器拥有。Unix 主机上的每次调用都进入新的进程组；正常退出后解除进程组保护，超时、取消或执行 future 被丢弃时终止整个组。这会同时清理由工具启动的 shell、下载器等后代进程，而不只终止直接子进程。
+字段语义：
 
-平台命令配置和进程组信号集中在 `platform` crate，其他 crate 不包含目标操作系统条件分支。尚未实现进程组控制的平台仍可编译，并依赖 Tokio 的直接子进程回收；这些平台在 P0 的能力矩阵中不可用。
+- `program`：已经由环境探测确定的可执行文件；
+- `args`：独立参数，不通过 shell 拼接；
+- `environment`：只增加或覆盖本次子进程的变量；
+- `current_dir`：工具确实依赖工作目录时才设置；
+- `stdin`：需要写入的固定字节；缺省连接空设备。
 
-需要在调用方退出后继续运行的 emulator 不使用这条普通执行路径。启动操作会使用平台提供的脱离会话原语，并由运行实例发现和停止流程接管生命周期。
+执行器不会清空整个继承环境。PATH 等变量仍可使用，但 SDK 和 AVD 相关变量由驱动显式覆盖。
 
-## 驱动接入
+## `Output` 只记录事实
 
-驱动把 `Invocation` 转换为 `CommandSpec`。短查询可以调用普通执行入口；安装、创建、启动和停止等长任务必须传入所属 `Operation` 的取消令牌。
+命令正常结束后，`Runner` 返回：
 
-当前执行器在命令结束后一次性返回完整输出。按行事件和下载进度需要由后续的流式执行入口提供，不能通过未读取的 stdout 或 stderr 管道实现。
+- 可选数字退出码；
+- 原始 stdout；
+- 原始 stderr。
+
+被信号终止时可能没有数字退出码。字节按 UTF-8 容错转换，避免工具输出中的局部无效字节使整个调用失败。
+
+`process` 不把“退出码 0”解释为成功，也不把非零退出码直接映射为领域错误。原因是 Android CLI 已实测会在 AVD 不存在、名称冲突和包不存在时仍返回 0。下一章的驱动必须验证每条命令自己的成功特征。
+
+## 超时
+
+`Runner` 提供：
+
+- `run`：使用默认超时；
+- `run_with_timeout`：为本次调用指定超时；
+- `run_cancellable`：默认超时并监听取消；
+- `run_cancellable_with_timeout`：同时显式指定两者。
+
+超时返回稳定错误码 `timeout`。可执行文件不存在返回 `tool_not_found`；其他启动和等待 I/O 错误返回 `internal`。
+
+这些错误表示进程没有产生可供驱动解释的完整结果。工具已经运行但输出格式未知时，使用的是驱动层的 `tool_output_unrecognized`。
+
+## 从 `Operation.cancel()` 到进程组
+
+`CancellationToken` 可以克隆。任意克隆调用 `cancel()` 后：
+
+- 状态永久保持为已取消；
+- 重复取消没有额外副作用；
+- 尚未开始的调用不会启动进程；
+- 正在等待的调用返回 `cancelled`。
+
+设计中的长任务持有一个令牌，驱动执行获得它的克隆。因此生产取消链路是：
+
+```text
+Swift Task / CLI 信号
+  → Operation.cancel()
+  → CancellationToken
+  → Runner
+  → ProcessGroup
+```
+
+UniFFI 生成的 Swift async 桥接不会自动传播 `Task.cancel()`。Swift 易用层必须使用 `withTaskCancellationHandler` 调用 `Operation.cancel()`；验证代码在 `experiments/uniffi-swift/`，结果见[实测记录](findings/uniffi-swift.md)。
+
+进程执行、驱动和 `Operation` 已经使用同一种令牌，但当前公开长任务尚未接入真实工具，所以这条完整链路目前只在技术验证中实际启动过子进程。
+
+## 为什么终止进程组
+
+Android 工具可能再启动 shell、下载进程或 Java 进程。只对直接子进程调用 kill，后代进程可能继续：
+
+- 持有 SDK 锁；
+- 写入下载缓存；
+- 占用 stdout 或 stderr 管道；
+- 在调用方已经收到取消结果后继续修改磁盘。
+
+Unix 上，`platform` 在启动前为每次普通调用建立独立进程组。正常结束后保护器解除；异常路径向整个组发送终止信号。
+
+平台差异只存在于 `platform` crate。未实现进程组控制的平台仍能编译，但 P0 能力矩阵不会开放这些平台上的领域操作。
+
+## 普通工具调用与 emulator 启动不同
+
+`Runner` 拥有短生命周期命令：查询、安装、删除和控制命令应当随调用结束而结束。
+
+emulator 主进程则要在创建它的 CLI 或应用退出后继续运行。它不能使用同一所有权模型；启动流程需要新会话和日志文件，之后由运行实例发现与停止流程接管。当前 emulator 启动入口尚未接入。
+
+## 当前输出模型的限制
+
+现有 `Runner` 在命令结束后一次性返回完整输出，适合环境探测和短查询。它尚不提供逐行事件，因此不能用于实现实时下载进度。
+
+即使暂时没有流式 API，stdout 和 stderr 也始终被读取，避免子进程因为管道写满而阻塞。
+
+下一章继续沿调用链进入[工具驱动](04-tool-drivers.md)，看原始 `Output` 如何变成可靠的数据或错误。
