@@ -89,7 +89,26 @@ impl Kit {
 
     pub async fn profiles(&self) -> Result<Vec<Profile>, Error> {
         self.require_capability(CapabilityId::DevicesProfiles)?;
-        Ok(Vec::new())
+        let report = self.read_report()?;
+        let executable = report
+            .snapshot
+            .tools
+            .iter()
+            .find(|tool| tool.name == report.snapshot.tool_names.android)
+            .and_then(|tool| tool.path.clone())
+            .ok_or_else(|| Error::new(ErrorCode::ToolNotFound, "Android CLI was not found"))?;
+        let environment = drivers::ToolEnvironment::from(&report.snapshot.paths);
+        let invocation = drivers::Invocation::android(
+            executable,
+            &report.snapshot.paths.sdk_root,
+            self.config.policy.android_cli_metrics,
+            ["emulator".into(), "create".into(), "--list-profiles".into()],
+        )
+        .with_environment(&environment);
+        let output = drivers::execute(&process::Runner::default(), invocation).await?;
+        Ok(profiles_from_ids(drivers::android::parse_profiles(
+            &output,
+        )?))
     }
 
     pub fn plan_create(&self, draft: CreateDeviceDraft) -> Result<Plan, Error> {
@@ -168,6 +187,15 @@ impl Kit {
     }
 }
 
+fn profiles_from_ids(ids: Vec<ProfileId>) -> Vec<Profile> {
+    ids.into_iter()
+        .map(|id| Profile {
+            id,
+            display_name: Field::Unavailable,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +254,13 @@ mod tests {
         let error = kit().plan_create(draft).unwrap_err();
         assert_eq!(error.code, ErrorCode::CapabilityUnavailable);
         assert_eq!(error.reasons[0].code, ReasonCode::NotImplemented);
+    }
+
+    #[test]
+    fn profile_without_a_tool_display_name_is_explicitly_unavailable() {
+        let profiles = profiles_from_ids(vec![ProfileId::new("medium_phone").unwrap()]);
+        assert_eq!(profiles[0].id.as_str(), "medium_phone");
+        assert!(profiles[0].display_name.as_value().is_none());
     }
 
     #[tokio::test]

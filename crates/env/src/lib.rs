@@ -129,6 +129,13 @@ fn state_for(id: CapabilityId, snapshot: &EnvironmentSnapshot) -> CapabilityStat
                 implementation: "platform_probe".into(),
             }
         }
+        CapabilityId::DevicesProfiles
+            if snapshot.host.supported && tool_found(snapshot, &snapshot.tool_names.android) =>
+        {
+            CapabilityState::Available {
+                implementation: "android_cli".into(),
+            }
+        }
         CapabilityId::DevicesPlanCreate => CapabilityState::Available {
             implementation: "plan_compiler".into(),
         },
@@ -146,7 +153,7 @@ fn unavailable_reasons(id: CapabilityId, snapshot: &EnvironmentSnapshot) -> Vec<
             "this host platform is not implemented yet",
         ));
     }
-    if needs_official_tools(id) && !required_tools_found(snapshot) {
+    if needs_official_tools(id) && !tools_found_for(id, snapshot) {
         let mut reason = Reason::new(
             ReasonCode::ToolNotFound,
             "one or more Android tools were not found",
@@ -159,8 +166,18 @@ fn unavailable_reasons(id: CapabilityId, snapshot: &EnvironmentSnapshot) -> Vec<
         });
         reasons.push(reason);
     }
-    reasons.push(Reason::not_implemented());
+    if id != CapabilityId::DevicesProfiles {
+        reasons.push(Reason::not_implemented());
+    }
     reasons
+}
+
+fn tools_found_for(id: CapabilityId, snapshot: &EnvironmentSnapshot) -> bool {
+    if id == CapabilityId::DevicesProfiles {
+        tool_found(snapshot, &snapshot.tool_names.android)
+    } else {
+        required_tools_found(snapshot)
+    }
 }
 
 fn needs_official_tools(id: CapabilityId) -> bool {
@@ -249,6 +266,38 @@ mod tests {
                     .map(|capability| &capability.state),
                 Some(CapabilityState::Available { .. })
             ));
+        }
+    }
+
+    #[test]
+    fn profiles_are_available_when_android_cli_is_present() {
+        let capabilities = capabilities(&snapshot(true, true));
+        assert!(matches!(
+            capabilities
+                .iter()
+                .find(|capability| capability.id == CapabilityId::DevicesProfiles)
+                .map(|capability| &capability.state),
+            Some(CapabilityState::Available { implementation }) if implementation == "android_cli"
+        ));
+    }
+
+    #[test]
+    fn implemented_profiles_do_not_report_not_implemented() {
+        let capabilities = capabilities(&snapshot(true, false));
+        let profiles = capabilities
+            .iter()
+            .find(|capability| capability.id == CapabilityId::DevicesProfiles)
+            .unwrap();
+        match &profiles.state {
+            CapabilityState::Unavailable { reasons } => {
+                assert!(reasons
+                    .iter()
+                    .any(|reason| reason.code == ReasonCode::ToolNotFound));
+                assert!(!reasons
+                    .iter()
+                    .any(|reason| reason.code == ReasonCode::NotImplemented));
+            }
+            CapabilityState::Available { .. } => panic!("profiles should be unavailable"),
         }
     }
 

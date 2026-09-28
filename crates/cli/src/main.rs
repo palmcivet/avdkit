@@ -15,6 +15,15 @@ enum Command {
     Environment,
     Capabilities,
     Refresh,
+    Devices {
+        #[command(subcommand)]
+        command: DevicesCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DevicesCommand {
+    Profiles,
 }
 
 #[tokio::main]
@@ -62,6 +71,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&Envelope::new(&report))?);
             } else {
                 println!("environment refreshed");
+            }
+        }
+        Command::Devices {
+            command: DevicesCommand::Profiles,
+        } => {
+            let profiles = kit.profiles().await?;
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&Envelope::new(&profiles))?
+                );
+            } else {
+                for profile in profiles {
+                    println!("{}", profile.id);
+                }
             }
         }
     }
