@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use model::{Error, ErrorCode, Event, OperationResult};
-use tokio::sync::{mpsc, oneshot, watch};
+use process::CancellationToken;
+use tokio::sync::{mpsc, oneshot};
 
 static NEXT_OPERATION: AtomicU64 = AtomicU64::new(1);
 
@@ -10,7 +11,7 @@ pub struct Operation {
     pub id: String,
     events: mpsc::UnboundedReceiver<Event>,
     result: oneshot::Receiver<Result<OperationResult, Error>>,
-    cancel: watch::Sender<bool>,
+    cancellation: CancellationToken,
 }
 
 impl Operation {
@@ -21,7 +22,7 @@ impl Operation {
     pub fn failed(error: Error) -> Self {
         let (event_tx, events) = mpsc::unbounded_channel();
         let (result_tx, result) = oneshot::channel();
-        let (cancel, _cancel_rx) = watch::channel(false);
+        let cancellation = CancellationToken::new();
         let _ = event_tx.send(Event::Warning {
             message: error.message.clone(),
         });
@@ -31,7 +32,7 @@ impl Operation {
             id: Self::next_id(),
             events,
             result,
-            cancel,
+            cancellation,
         }
     }
 
@@ -44,7 +45,7 @@ impl Operation {
     }
 
     pub fn cancel(&self) {
-        let _ = self.cancel.send(true);
+        self.cancellation.cancel();
     }
 
     pub async fn result(self) -> Result<OperationResult, Error> {
@@ -61,9 +62,10 @@ impl Operation {
     pub(crate) fn cancellable() -> Self {
         let (event_tx, events) = mpsc::unbounded_channel();
         let (result_tx, result) = oneshot::channel();
-        let (cancel, mut cancel_rx) = watch::channel(false);
+        let cancellation = CancellationToken::new();
+        let cancellation_for_task = cancellation.clone();
         tokio::spawn(async move {
-            let _ = cancel_rx.changed().await;
+            cancellation_for_task.cancelled().await;
             drop(event_tx);
             let _ = result_tx.send(Err(Error::new(ErrorCode::Cancelled, "operation cancelled")));
         });
@@ -71,7 +73,7 @@ impl Operation {
             id: Self::next_id(),
             events,
             result,
-            cancel,
+            cancellation,
         }
     }
 }

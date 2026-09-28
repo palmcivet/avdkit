@@ -1,0 +1,8 @@
+{
+  "command": ["android", "--version"],
+  "status": 0,
+  "stdout": "1.0.15985488\n",
+  "stderr": "",
+  "captured_at": "2026-09-28",
+  "redactions": []
+}

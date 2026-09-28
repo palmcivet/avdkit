@@ -2,10 +2,19 @@
 
 #![allow(clippy::result_large_err)]
 
-use std::path::PathBuf;
+pub mod adb;
+pub mod android;
+pub mod emulator;
+#[cfg(test)]
+mod fixture;
+mod output;
 
-use model::{AndroidCliMetrics, Error};
-use process::{CommandSpec, Output, Runner};
+use std::{collections::BTreeMap, path::PathBuf};
+
+use model::{AndroidCliMetrics, Error, PlatformPaths};
+use process::{CancellationToken, CommandSpec, Output, Runner};
+
+pub use output::NormalizedOutput;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
@@ -21,6 +30,49 @@ pub struct Invocation {
     pub tool: Tool,
     pub executable: PathBuf,
     pub args: Vec<String>,
+    pub environment: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolEnvironment {
+    pub sdk_root: PathBuf,
+    pub user_root: PathBuf,
+    pub avd_root: PathBuf,
+    pub java_home: Option<PathBuf>,
+}
+
+impl From<&PlatformPaths> for ToolEnvironment {
+    fn from(paths: &PlatformPaths) -> Self {
+        Self {
+            sdk_root: paths.sdk_root.clone(),
+            user_root: paths.user_root.clone(),
+            avd_root: paths.avd_root.clone(),
+            java_home: None,
+        }
+    }
+}
+
+impl ToolEnvironment {
+    fn variables(&self) -> BTreeMap<String, String> {
+        let mut variables = BTreeMap::from([
+            (
+                "ANDROID_SDK_ROOT".into(),
+                self.sdk_root.to_string_lossy().into_owned(),
+            ),
+            (
+                "ANDROID_USER_HOME".into(),
+                self.user_root.to_string_lossy().into_owned(),
+            ),
+            (
+                "ANDROID_AVD_HOME".into(),
+                self.avd_root.to_string_lossy().into_owned(),
+            ),
+        ]);
+        if let Some(java_home) = &self.java_home {
+            variables.insert("JAVA_HOME".into(), java_home.to_string_lossy().into_owned());
+        }
+        variables
+    }
 }
 
 impl Invocation {
@@ -39,13 +91,38 @@ impl Invocation {
             tool: Tool::Android,
             executable,
             args: command_args,
+            environment: BTreeMap::new(),
         }
+    }
+
+    pub fn emulator(executable: PathBuf, args: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            tool: Tool::Emulator,
+            executable,
+            args: args.into_iter().collect(),
+            environment: BTreeMap::new(),
+        }
+    }
+
+    pub fn adb(executable: PathBuf, args: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            tool: Tool::Adb,
+            executable,
+            args: args.into_iter().collect(),
+            environment: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_environment(mut self, environment: &ToolEnvironment) -> Self {
+        self.environment = environment.variables();
+        self
     }
 
     pub fn command(self) -> CommandSpec {
         CommandSpec {
             program: self.executable,
             args: self.args,
+            environment: self.environment,
             ..CommandSpec::default()
         }
     }
@@ -53,6 +130,16 @@ impl Invocation {
 
 pub async fn execute(runner: &Runner, invocation: Invocation) -> Result<Output, Error> {
     runner.run(invocation.command()).await
+}
+
+pub async fn execute_cancellable(
+    runner: &Runner,
+    invocation: Invocation,
+    cancellation: &CancellationToken,
+) -> Result<Output, Error> {
+    runner
+        .run_cancellable(invocation.command(), cancellation)
+        .await
 }
 
 #[cfg(test)]
@@ -92,5 +179,22 @@ mod tests {
                 .map(String::from)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn tool_environment_is_injected_per_command() {
+        let environment = ToolEnvironment {
+            sdk_root: PathBuf::from("/sdk"),
+            user_root: PathBuf::from("/user"),
+            avd_root: PathBuf::from("/avd"),
+            java_home: Some(PathBuf::from("/java")),
+        };
+        let command = Invocation::adb(PathBuf::from("/bin/adb"), ["devices".into()])
+            .with_environment(&environment)
+            .command();
+        assert_eq!(command.environment["ANDROID_SDK_ROOT"], "/sdk");
+        assert_eq!(command.environment["ANDROID_USER_HOME"], "/user");
+        assert_eq!(command.environment["ANDROID_AVD_HOME"], "/avd");
+        assert_eq!(command.environment["JAVA_HOME"], "/java");
     }
 }

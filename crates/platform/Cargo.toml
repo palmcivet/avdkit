@@ -7,3 +7,6 @@ rust-version.workspace = true
 
 [dependencies]
 model = { package = "avdkit-model", path = "../model" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -3,9 +3,13 @@
 //! Other crates consume this description instead of branching on the target
 //! operating system themselves.
 
+mod process;
+
 use std::path::PathBuf;
 
 use model::{CpuArchitecture, Description, Host, Platform, PlatformPaths, ToolNames};
+
+pub use process::{prepare_child, ProcessGroup};
 
 pub fn describe() -> Description {
     let host = current_host();
@@ -29,6 +33,7 @@ pub fn describe() -> Description {
         host: host.clone(),
         paths: PlatformPaths {
             sdk_root,
+            user_root,
             avd_root,
             data_root: default_data_root(&host, &home),
         },

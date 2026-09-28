@@ -203,6 +203,7 @@ mod tests {
             },
             paths: PlatformPaths {
                 sdk_root: PathBuf::from("/sdk"),
+                user_root: PathBuf::from("/user"),
                 avd_root: PathBuf::from("/avd"),
                 data_root: PathBuf::from("/data"),
             },

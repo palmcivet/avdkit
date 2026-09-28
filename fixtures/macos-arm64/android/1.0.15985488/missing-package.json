@@ -1,0 +1,11 @@
+{
+  "command": ["android", "--sdk=<SDK>", "sdk", "remove", "<MISSING_PACKAGE>"],
+  "status": 0,
+  "stdout": "Package <MISSING_PACKAGE> not found.\n",
+  "stderr": "",
+  "captured_at": "2026-09-28",
+  "redactions": [
+    "SDK root replaced with <SDK>",
+    "package path replaced with <MISSING_PACKAGE>"
+  ]
+}

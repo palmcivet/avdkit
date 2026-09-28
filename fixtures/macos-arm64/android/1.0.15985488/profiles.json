@@ -1,0 +1,8 @@
+{
+  "command": ["android", "--sdk=<SDK>", "emulator", "create", "--list-profiles"],
+  "status": 0,
+  "stdout": "large_desktop\nmedium_desktop\nmedium_phone\nmedium_tablet\nsmall_desktop\nsmall_phone\n",
+  "stderr": "",
+  "captured_at": "2026-09-28",
+  "redactions": ["SDK root replaced with <SDK>"]
+}

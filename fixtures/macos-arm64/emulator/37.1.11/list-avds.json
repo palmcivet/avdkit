@@ -1,0 +1,8 @@
+{
+  "command": ["emulator", "-list-avds"],
+  "status": 0,
+  "stdout": "avdkit_test_fixture\n",
+  "stderr": "",
+  "captured_at": "2026-09-28",
+  "redactions": ["user AVD identifier replaced with avdkit_test_fixture"]
+}

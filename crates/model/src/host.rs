@@ -29,6 +29,7 @@ pub struct Host {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlatformPaths {
     pub sdk_root: PathBuf,
+    pub user_root: PathBuf,
     pub avd_root: PathBuf,
     pub data_root: PathBuf,
 }

@@ -5,11 +5,7 @@
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use model::{Error, ErrorCode};
-use tokio::{
-    io::AsyncWriteExt,
-    process::Command,
-    time::{error::Elapsed, timeout},
-};
+use tokio::{io::AsyncWriteExt, process::Command, sync::watch, time::sleep};
 
 #[derive(Debug, Clone, Default)]
 pub struct CommandSpec {
@@ -32,6 +28,40 @@ pub struct Runner {
     pub default_timeout: Duration,
 }
 
+#[derive(Debug, Clone)]
+pub struct CancellationToken {
+    cancelled: watch::Sender<bool>,
+}
+
+impl Default for CancellationToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        let (cancelled, _) = watch::channel(false);
+        Self { cancelled }
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.send_replace(true);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        *self.cancelled.borrow()
+    }
+
+    pub async fn cancelled(&self) {
+        let mut cancelled = self.cancelled.subscribe();
+        if *cancelled.borrow() {
+            return;
+        }
+        let _ = cancelled.changed().await;
+    }
+}
+
 impl Default for Runner {
     fn default() -> Self {
         Self {
@@ -45,16 +75,49 @@ impl Runner {
         self.run_with_timeout(spec, self.default_timeout).await
     }
 
+    pub async fn run_cancellable(
+        &self,
+        spec: CommandSpec,
+        cancellation: &CancellationToken,
+    ) -> Result<Output, Error> {
+        self.run_cancellable_with_timeout(spec, self.default_timeout, cancellation)
+            .await
+    }
+
     pub async fn run_with_timeout(
         &self,
         spec: CommandSpec,
         duration: Duration,
     ) -> Result<Output, Error> {
+        self.run_controlled(spec, duration, None).await
+    }
+
+    pub async fn run_cancellable_with_timeout(
+        &self,
+        spec: CommandSpec,
+        duration: Duration,
+        cancellation: &CancellationToken,
+    ) -> Result<Output, Error> {
+        self.run_controlled(spec, duration, Some(cancellation))
+            .await
+    }
+
+    async fn run_controlled(
+        &self,
+        spec: CommandSpec,
+        duration: Duration,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Output, Error> {
+        if cancellation.is_some_and(CancellationToken::is_cancelled) {
+            return Err(cancelled_error());
+        }
+
         let mut command = Command::new(&spec.program);
         command
             .args(&spec.args)
             .envs(&spec.environment)
             .kill_on_drop(true);
+        platform::prepare_child(command.as_std_mut());
         if let Some(current_dir) = &spec.current_dir {
             command.current_dir(current_dir);
         }
@@ -68,7 +131,8 @@ impl Runner {
                 std::process::Stdio::null()
             })
             .spawn()
-            .map_err(|error| Error::new(ErrorCode::ToolNotFound, error.to_string()))?;
+            .map_err(spawn_error)?;
+        let mut process_group = child.id().map(platform::ProcessGroup::for_child);
 
         if let Some(input) = spec.stdin {
             if let Some(mut stdin) = child.stdin.take() {
@@ -79,21 +143,141 @@ impl Runner {
             }
         }
 
-        let result = timeout(duration, child.wait_with_output()).await;
+        let result = if let Some(cancellation) = cancellation {
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => Err(cancelled_error()),
+                _ = sleep(duration) => Err(timeout_error(duration)),
+                result = child.wait_with_output() => result.map_err(wait_error),
+            }
+        } else {
+            tokio::select! {
+                biased;
+                _ = sleep(duration) => Err(timeout_error(duration)),
+                result = child.wait_with_output() => result.map_err(wait_error),
+            }
+        };
+
         match result {
-            Ok(result) => {
-                let output =
-                    result.map_err(|error| Error::new(ErrorCode::Internal, error.to_string()))?;
+            Ok(output) => {
+                if let Some(group) = &mut process_group {
+                    group.disarm();
+                }
                 Ok(Output {
                     status: output.status.code(),
                     stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
                     stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
                 })
             }
-            Err(Elapsed { .. }) => Err(Error::new(
-                ErrorCode::Timeout,
-                format!("command timed out after {} seconds", duration.as_secs()),
-            )),
+            Err(error) => Err(error),
         }
+    }
+}
+
+fn spawn_error(error: std::io::Error) -> Error {
+    let code = if error.kind() == std::io::ErrorKind::NotFound {
+        ErrorCode::ToolNotFound
+    } else {
+        ErrorCode::Internal
+    };
+    Error::new(code, error.to_string())
+}
+
+fn wait_error(error: std::io::Error) -> Error {
+    Error::new(ErrorCode::Internal, error.to_string())
+}
+
+fn cancelled_error() -> Error {
+    Error::new(ErrorCode::Cancelled, "command cancelled")
+}
+
+fn timeout_error(duration: Duration) -> Error {
+    Error::new(
+        ErrorCode::Timeout,
+        format!("command timed out after {duration:?}"),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{env, thread};
+
+    const HELPER_MODE: &str = "PROCESS_TEST_MODE";
+
+    fn helper_spec(mode: &str) -> CommandSpec {
+        CommandSpec {
+            program: env::current_exe().unwrap(),
+            args: vec![
+                "--exact".into(),
+                "tests::process_helper".into(),
+                "--nocapture".into(),
+            ],
+            environment: [(HELPER_MODE.into(), mode.into())].into(),
+            ..CommandSpec::default()
+        }
+    }
+
+    #[test]
+    fn process_helper() {
+        match env::var(HELPER_MODE).as_deref() {
+            Ok("output") => {
+                println!("helper stdout");
+                eprintln!("helper stderr");
+            }
+            Ok("sleep") => thread::sleep(Duration::from_secs(120)),
+            _ => {}
+        }
+    }
+
+    #[tokio::test]
+    async fn captures_output_and_status() {
+        let output = Runner::default().run(helper_spec("output")).await.unwrap();
+        assert_eq!(output.status, Some(0));
+        assert!(output.stdout.contains("helper stdout"));
+        assert!(output.stderr.contains("helper stderr"));
+    }
+
+    #[tokio::test]
+    async fn rejects_a_cancelled_command_before_spawning() {
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let error = Runner::default()
+            .run_cancellable(
+                CommandSpec {
+                    program: PathBuf::from("definitely-does-not-exist"),
+                    ..CommandSpec::default()
+                },
+                &cancellation,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn cancels_a_running_command() {
+        let runner = Runner::default();
+        let cancellation = CancellationToken::new();
+        let cancellation_for_task = cancellation.clone();
+        let task = tokio::spawn(async move {
+            runner
+                .run_cancellable(helper_spec("sleep"), &cancellation_for_task)
+                .await
+        });
+        sleep(Duration::from_millis(100)).await;
+        cancellation.cancel();
+
+        let error = task.await.unwrap().unwrap_err();
+        assert_eq!(error.code, ErrorCode::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn times_out_a_running_command() {
+        let error = Runner::default()
+            .run_with_timeout(helper_spec("sleep"), Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Timeout);
     }
 }
