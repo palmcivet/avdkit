@@ -13,7 +13,10 @@ use std::{
 
 use model::{CpuArchitecture, Description, Field, Host, Platform, PlatformPaths, ToolNames};
 
-pub use process::{prepare_child, ProcessGroup};
+pub use process::{
+    prepare_child, prepare_detached_child, process_exists, signal_process_group, ProcessGroup,
+    ProcessSignal,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoginShell {
@@ -75,6 +78,7 @@ pub fn describe_with_environment(environment: &BTreeMap<String, String>) -> Desc
             sdk_root,
             user_root,
             avd_root,
+            runtime_root: runtime_root(&host, &home, environment),
             data_root: default_data_root(&host, &home, environment),
         },
         tools: tool_names(&host),
@@ -141,6 +145,28 @@ fn default_sdk_root(
             .unwrap_or_else(|| home.to_path_buf())
             .join("Android/Sdk"),
         Platform::Unsupported => home.join("Android/Sdk"),
+    }
+}
+
+fn runtime_root(
+    host: &Host,
+    home: &std::path::Path,
+    environment: &BTreeMap<String, String>,
+) -> PathBuf {
+    match host.platform {
+        Platform::MacOs => home.join("Library/Caches/TemporaryItems/avd/running"),
+        Platform::Linux => environment
+            .get("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".cache"))
+            .join("avd/running"),
+        Platform::Windows => environment
+            .get("TEMP")
+            .or_else(|| environment.get("TMP"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join("AppData/Local/Temp"))
+            .join("avd/running"),
+        Platform::Unsupported => home.join(".cache/avd/running"),
     }
 }
 

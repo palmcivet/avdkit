@@ -7,6 +7,7 @@ mod executor;
 mod operation;
 mod planner;
 mod routing;
+mod runtime;
 
 use std::sync::{Arc, RwLock};
 
@@ -235,32 +236,63 @@ impl Kit {
     /// Lists discovered running emulator instances.
     pub async fn running(&self) -> Result<Vec<RunningInstance>, Error> {
         self.require_capability(CapabilityId::RuntimeRunning)?;
-        Ok(Vec::new())
+        let report = self.read_report()?;
+        debug_assert_eq!(
+            Router.selected(CapabilityId::RuntimeRunning, &report.snapshot)?,
+            Implementation::RuntimeDiscovery
+        );
+        runtime::running(&report.snapshot).await
     }
 
     /// Returns the current boot state of an AVD.
-    pub async fn boot_status(&self, _id: &AvdId) -> Result<BootStatus, Error> {
+    pub async fn boot_status(&self, id: &AvdId) -> Result<BootStatus, Error> {
         self.require_capability(CapabilityId::RuntimeBootStatus)?;
-        Ok(BootStatus::Offline)
+        let report = self.read_report()?;
+        runtime::boot_status(&report.snapshot, id).await
     }
 
     /// Starts an emulator operation.
-    pub fn start(&self, _id: AvdId, options: StartOptions) -> Operation {
+    pub fn start(&self, id: AvdId, options: StartOptions) -> Operation {
         if !options.is_default() {
             return Operation::not_implemented("custom start options");
         }
-        match self.require_capability(CapabilityId::RuntimeStart) {
-            Ok(()) => Operation::not_implemented("runtime.start"),
-            Err(error) => Operation::failed(error),
+        if let Err(error) = self.require_capability(CapabilityId::RuntimeStart) {
+            return Operation::failed(error);
         }
+        let snapshot = match self.read_report() {
+            Ok(report) => report.snapshot,
+            Err(error) => return Operation::failed(error),
+        };
+        Operation::spawn(move |_operation_id, events, cancellation| {
+            Box::pin(runtime::start(id, snapshot, events, cancellation))
+        })
     }
 
     /// Starts an operation that stops an emulator.
-    pub fn stop(&self, _id: AvdId) -> Operation {
-        match self.require_capability(CapabilityId::RuntimeStop) {
-            Ok(()) => Operation::not_implemented("runtime.stop"),
-            Err(error) => Operation::failed(error),
+    pub fn stop(&self, id: AvdId) -> Operation {
+        if let Err(error) = self.require_capability(CapabilityId::RuntimeStop) {
+            return Operation::failed(error);
         }
+        let snapshot = match self.read_report() {
+            Ok(report) => report.snapshot,
+            Err(error) => return Operation::failed(error),
+        };
+        let implementation = match Router.selected(CapabilityId::RuntimeStop, &snapshot) {
+            Ok(implementation) => implementation,
+            Err(error) => return Operation::failed(error),
+        };
+        let use_adb = implementation == Implementation::AdbEmuKill;
+        let metrics = self.config.policy.android_cli_metrics;
+        Operation::spawn(move |_operation_id, events, cancellation| {
+            Box::pin(runtime::stop(
+                id,
+                snapshot,
+                use_adb,
+                metrics,
+                events,
+                cancellation,
+            ))
+        })
     }
 
     fn read_report(&self) -> Result<EnvironmentReport, Error> {

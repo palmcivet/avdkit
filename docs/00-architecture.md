@@ -90,7 +90,7 @@ flowchart LR
 
 ```text
 cli / ffi → core
-core      → env, drivers, avdfs, process, model
+core      → env, drivers, avdfs, process, platform, model
 env       → drivers, process, platform, model
 drivers   → process, model
 avdfs     → model
@@ -116,7 +116,8 @@ model     → 无 workspace 依赖
 - 环境刷新；
 - Android CLI 预设机型查询；
 - AVD 文件设备列表与详情；
-- 创建计划编译与执行。
+- 创建计划编译与执行；
+- 运行实例、开机状态、启动与停止。
 
 其他公开入口会返回结构化的 `capability_unavailable`，而不是空结果或挂起的任务。
 
@@ -131,3 +132,4 @@ model     → 无 workspace 依赖
 7. [公开基线与契约测试](07-public-baseline.md)：MSRV、文档、golden、CLI 和 blocking 边界。
 8. [环境探测与领域路由](08-environment-routing.md)：来源合并、SDK 选择、包扫描与固定实现选择。
 9. [创建计划执行](09-create-plan-execution.md)：预检、锁、文件事务、事件、取消与补偿。
+10. [模拟器运行时闭环](10-runtime-lifecycle.md)：发现、开机判定、脱离启动与分级停止。

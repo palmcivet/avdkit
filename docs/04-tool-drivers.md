@@ -7,7 +7,7 @@
 P0 涉及三个官方可执行文件：
 
 - `android`：SDK 包管理、六个预设机型以及部分 AVD 操作；
-- `emulator`：当前解析 AVD 列表；直接启动尚未接入；
+- `emulator`：解析 AVD 列表并由运行时执行器直接启动；
 - `adb`：运行实例、开机状态和停止控制。
 
 每个驱动负责单条命令的构造和解释，不负责：
@@ -134,11 +134,14 @@ Android CLI 1.0.x 已实测在以下失败中仍返回 0：
 
 ### adb
 
-已实现 `adb devices -l`：
+已实现 `adb devices -l` 以及运行时探针：
 
 - 保留 serial；
 - 保留 `device`、`offline`、`unauthorized` 等原始状态；
 - 将 `product:`、`model:`、`transport_id:` 等列保存为键值字段。
+- 解析 `getprop` 或 emulator console 返回的 AVD ID；
+- 判断 `sys.boot_completed` 与 `pm path android`；
+- 验证 `adb emu kill` 的确认输出。
 
 驱动不会丢弃离线设备。哪些状态应进入公共运行实例，由 `core` 决定。
 

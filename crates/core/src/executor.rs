@@ -816,6 +816,7 @@ mod tests {
                 sdk_root,
                 user_root: root.join("user"),
                 avd_root: root.join("user/avd"),
+                runtime_root: root.join("runtime"),
                 data_root: root.join("data"),
             },
             sdk_root_source: ValueSource::CallerOverride,

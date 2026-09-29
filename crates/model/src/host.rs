@@ -52,6 +52,8 @@ pub struct PlatformPaths {
     pub user_root: PathBuf,
     /// AVD index directory.
     pub avd_root: PathBuf,
+    /// Platform emulator runtime-discovery directory.
+    pub runtime_root: PathBuf,
     /// Library-owned data directory.
     pub data_root: PathBuf,
 }

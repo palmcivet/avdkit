@@ -36,7 +36,7 @@ let profiles = kit.profiles().await?;
 
 - `snapshot.host`：平台、CPU 架构以及当前是否受支持；
 - `snapshot.host.android_abi`：运行时探测的 Android ABI；
-- `snapshot.paths` 与 `sdk_root_source`：SDK、Android 用户目录、AVD 目录、库数据目录以及 SDK 选择来源；
+- `snapshot.paths` 与 `sdk_root_source`：SDK、Android 用户目录、AVD 目录、运行发现目录、库数据目录以及 SDK 选择来源；
 - `snapshot.environment`：参与路径选择的环境值及其来源；
 - `snapshot.tools`：每个官方工具的路径、版本、状态和包来源；
 - `snapshot.installed_packages`：从 `source.properties` 扫描的工具包和系统镜像；
@@ -99,7 +99,7 @@ for profile in profiles {
 }
 ```
 
-环境、能力、SDK 包、设备、机型、运行实例和开机状态都采用这种形态。当前已真实执行的是环境、能力、刷新、设备列表与详情，以及预设机型查询。
+环境、能力、SDK 包、设备、机型、运行实例和开机状态都采用这种形态。运行实例组合 adb 与存活发现文件，开机就绪同时验证系统属性和包管理器。
 
 ### 长任务：返回 `Operation`
 
@@ -121,9 +121,9 @@ let result = operation.result().await?;
 operation.cancel();
 ```
 
-`Operation`、计划执行器、驱动和进程执行层使用同一种取消令牌。创建计划执行期间，取消会沿这条链路终止 Android CLI 进程组，最终结果使用 `cancelled`。
+`Operation`、计划执行器、运行时执行器、驱动和进程执行层使用同一种取消令牌。创建和模拟器生命周期操作的取消会沿这条链路终止对应进程组，最终结果使用 `cancelled`。
 
-安装、删除、启动和停止入口尚未接入真实驱动。调用这些入口会得到会正常结束的 `Operation`，最终错误为 `capability_unavailable`，不会无限等待。
+启动会在新会话中运行 emulator，等待发现、adb 和开机就绪；停止先使用 adb，再按超时升级到进程组信号。安装和删除入口尚未接入真实驱动，调用时仍返回 `capability_unavailable`。
 
 ### 组合操作：先生成 `Plan`
 

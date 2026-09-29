@@ -5,6 +5,30 @@ pub fn prepare_child(command: &mut Command) {
     os::prepare_child(command);
 }
 
+/// Configures a long-lived child to run in a new session.
+pub fn prepare_detached_child(command: &mut Command) {
+    os::prepare_detached_child(command);
+}
+
+/// Signal used when stopping a detached emulator process group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessSignal {
+    /// Request orderly termination.
+    Terminate,
+    /// Force immediate termination.
+    Kill,
+}
+
+/// Returns whether a process identifier still refers to a live process.
+pub fn process_exists(pid: u32) -> bool {
+    os::process_exists(pid)
+}
+
+/// Sends a signal to the process group led by `pid`, falling back to the process.
+pub fn signal_process_group(pid: u32, signal: ProcessSignal) -> io::Result<()> {
+    os::signal_process_group(pid, signal)
+}
+
 /// Owns the platform process group created for one child process.
 #[derive(Debug)]
 pub struct ProcessGroup {
@@ -47,10 +71,23 @@ impl Drop for ProcessGroup {
 
 #[cfg(unix)]
 mod os {
+    use super::ProcessSignal;
     use std::{io, os::unix::process::CommandExt, process::Command};
 
     pub fn prepare_child(command: &mut Command) {
         command.process_group(0);
+    }
+
+    pub fn prepare_detached_child(command: &mut Command) {
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    Err(io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
     }
 
     pub fn group_id(pid: u32) -> Option<i32> {
@@ -58,30 +95,65 @@ mod os {
     }
 
     pub fn kill_group(id: i32) -> io::Result<()> {
-        let result = unsafe { libc::kill(-id, libc::SIGKILL) };
+        match signal(-id, libc::SIGKILL) {
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+            result => result,
+        }
+    }
+
+    pub fn process_exists(pid: u32) -> bool {
+        let Ok(pid) = i32::try_from(pid) else {
+            return false;
+        };
+        let result = unsafe { libc::kill(pid, 0) };
+        result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+
+    pub fn signal_process_group(pid: u32, signal_kind: ProcessSignal) -> io::Result<()> {
+        let pid = i32::try_from(pid)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "process ID is too large"))?;
+        let signal_number = match signal_kind {
+            ProcessSignal::Terminate => libc::SIGTERM,
+            ProcessSignal::Kill => libc::SIGKILL,
+        };
+        match signal(-pid, signal_number) {
+            Ok(()) => Ok(()),
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => signal(pid, signal_number),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn signal(pid: i32, signal: i32) -> io::Result<()> {
+        let result = unsafe { libc::kill(pid, signal) };
         if result == 0 {
             return Ok(());
         }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
-            Ok(())
-        } else {
-            Err(error)
-        }
+        Err(io::Error::last_os_error())
     }
 }
 
 #[cfg(not(unix))]
 mod os {
+    use super::ProcessSignal;
     use std::{io, process::Command};
 
     pub fn prepare_child(_command: &mut Command) {}
+
+    pub fn prepare_detached_child(_command: &mut Command) {}
 
     pub fn group_id(_pid: u32) -> Option<i32> {
         None
     }
 
     pub fn kill_group(_id: i32) -> io::Result<()> {
+        Ok(())
+    }
+
+    pub fn process_exists(_pid: u32) -> bool {
+        false
+    }
+
+    pub fn signal_process_group(_pid: u32, _signal: ProcessSignal) -> io::Result<()> {
         Ok(())
     }
 }
@@ -149,5 +221,23 @@ mod tests {
 
         assert!(processes.iter().copied().all(|pid| !process_exists(pid)));
         let _ = fs::remove_file(marker);
+    }
+
+    #[test]
+    fn detached_child_leads_a_new_session() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("sleep 120")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        prepare_detached_child(&mut command);
+
+        let mut child = command.spawn().unwrap();
+        let pid = i32::try_from(child.id()).unwrap();
+        assert_eq!(unsafe { libc::getsid(pid) }, pid);
+        signal_process_group(child.id(), ProcessSignal::Kill).unwrap();
+        child.wait().unwrap();
     }
 }

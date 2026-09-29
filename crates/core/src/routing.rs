@@ -61,9 +61,10 @@ impl Router {
             Id::DevicesProfiles => (vec![Impl::AndroidCli], true),
             Id::DevicesPlanCreate => (vec![Impl::PlanCompiler], true),
             Id::DevicesDelete => (vec![Impl::AndroidCli], false),
-            Id::RuntimeRunning | Id::RuntimeBootStatus => (vec![Impl::RuntimeDiscovery], false),
-            Id::RuntimeStart | Id::RuntimeStartCustom => (vec![Impl::EmulatorBinary], false),
-            Id::RuntimeStop => (vec![Impl::AdbEmuKill, Impl::AndroidCli], false),
+            Id::RuntimeRunning | Id::RuntimeBootStatus => (vec![Impl::RuntimeDiscovery], true),
+            Id::RuntimeStart => (vec![Impl::EmulatorBinary], true),
+            Id::RuntimeStartCustom => (vec![Impl::EmulatorBinary], false),
+            Id::RuntimeStop => (vec![Impl::AdbEmuKill, Impl::AndroidCli], true),
             _ => (Vec::new(), false),
         };
         Route {
@@ -157,6 +158,7 @@ impl Router {
             }
             Implementation::EmulatorBinary => {
                 tool_available(snapshot, &snapshot.tool_names.emulator)
+                    && tool_available(snapshot, &snapshot.tool_names.adb)
             }
             Implementation::AvdFiles
             | Implementation::InstalledSdkFiles
@@ -176,7 +178,7 @@ impl Router {
     }
 
     fn tool_reasons(self, route: &Route, snapshot: &EnvironmentSnapshot) -> Vec<Reason> {
-        let names = route
+        let mut names = route
             .implementations
             .iter()
             .filter_map(|implementation| match implementation {
@@ -188,6 +190,12 @@ impl Router {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        if route
+            .implementations
+            .contains(&Implementation::EmulatorBinary)
+        {
+            names.push(&snapshot.tool_names.adb);
+        }
         let mut reasons = Vec::new();
         for name in names {
             match snapshot.tools.iter().find(|tool| &tool.name == name) {
@@ -241,6 +249,7 @@ mod tests {
                 sdk_root: PathBuf::from("/sdk"),
                 user_root: PathBuf::from("/user"),
                 avd_root: PathBuf::from("/avd"),
+                runtime_root: PathBuf::from("/runtime"),
                 data_root: PathBuf::from("/data"),
             },
             sdk_root_source: ValueSource::PlatformDefault,
@@ -333,6 +342,36 @@ mod tests {
                 .unwrap()
                 .state,
             CapabilityState::Available { implementation } if implementation == "android_cli"
+        ));
+    }
+
+    #[test]
+    fn runtime_capabilities_require_their_complete_tool_sets() {
+        let adb_only = Router.matrix(&snapshot(&["adb"]));
+        assert!(matches!(
+            &adb_only
+                .capability(CapabilityId::RuntimeRunning)
+                .unwrap()
+                .state,
+            CapabilityState::Available { .. }
+        ));
+        assert!(matches!(
+            &adb_only
+                .capability(CapabilityId::RuntimeStart)
+                .unwrap()
+                .state,
+            CapabilityState::Unavailable { reasons }
+                if reasons.iter().any(|reason| reason.code == ReasonCode::ToolNotFound)
+        ));
+
+        let complete = Router.matrix(&snapshot(&["adb", "emulator"]));
+        assert!(matches!(
+            &complete
+                .capability(CapabilityId::RuntimeStart)
+                .unwrap()
+                .state,
+            CapabilityState::Available { implementation }
+                if implementation == "emulator_binary"
         ));
     }
 

@@ -60,6 +60,7 @@ dependencies = [
  "avdkit-drivers",
  "avdkit-env",
  "avdkit-model",
+ "avdkit-platform",
  "avdkit-process",
  "serde_json",
  "tokio",

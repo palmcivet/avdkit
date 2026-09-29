@@ -69,7 +69,7 @@ Android CLI 从合并后的 PATH 查找。探测执行 `android --version`，只
 - 包管理使用 Android CLI；
 - 创建请求先使用计划编译器，计划中的实际创建工具为 Android CLI。
 
-路由表与可用性判断分开：路由可以声明未来操作应使用哪个实现，而能力仍会在实现尚未接入时返回 `not_implemented`。工具存在但未就绪时返回 `tool_not_ready`，工具不存在时返回 `tool_not_found`。
+路由表与可用性判断分开：路由可以声明未来操作应使用哪个实现，而能力仍会在实现尚未接入时返回 `not_implemented`。运行发现与开机状态要求 adb；启动同时要求 emulator 和 adb；停止优先要求 adb，缺失时可选择 Android CLI。工具存在但未就绪时返回 `tool_not_ready`，工具不存在时返回 `tool_not_found`。
 
 能力矩阵只使用平台支持状态、工具状态与版本、路由和实现接入状态。AVD 是否运行、名称是否冲突、镜像是否满足某次创建请求等动态条件不进入矩阵，由具体操作的预检判断。
 

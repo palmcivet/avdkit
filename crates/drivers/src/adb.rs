@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use model::{Diagnostic, Error, ErrorCode};
+use model::{AvdId, Diagnostic, Error, ErrorCode};
 use process::Output;
 
 use crate::NormalizedOutput;
@@ -30,6 +30,47 @@ pub fn parse_devices(output: &Output) -> Result<Vec<Device>, Error> {
         .filter(|line| !line.starts_with("* daemon"))
         .map(|line| parse_device(output, line))
         .collect()
+}
+
+pub fn parse_avd_name(output: &Output) -> Result<Option<AvdId>, Error> {
+    if output.status != Some(0) {
+        return Ok(None);
+    }
+    let normalized = NormalizedOutput::from(output);
+    let name = normalized
+        .stdout
+        .iter()
+        .map(String::as_str)
+        .find(|line| !line.eq_ignore_ascii_case("ok") && !line.eq_ignore_ascii_case("unknown"));
+    name.map(|name| {
+        AvdId::new(name.to_owned())
+            .map_err(|_| unrecognized(output, "adb returned an invalid AVD identifier"))
+    })
+    .transpose()
+}
+
+pub fn boot_completed(output: &Output) -> bool {
+    output.status == Some(0)
+        && NormalizedOutput::from(output)
+            .stdout
+            .iter()
+            .any(|line| line == "1")
+}
+
+pub fn package_manager_ready(output: &Output) -> bool {
+    output.status == Some(0)
+        && NormalizedOutput::from(output)
+            .stdout
+            .iter()
+            .any(|line| line.starts_with("package:"))
+}
+
+pub fn emu_kill_succeeded(output: &Output) -> bool {
+    output.status == Some(0)
+        && NormalizedOutput::from(output).lines().any(|line| {
+            line.eq_ignore_ascii_case("ok")
+                || line.to_ascii_lowercase().contains("killing emulator")
+        })
 }
 
 fn parse_device(output: &Output, line: &str) -> Result<Device, Error> {
@@ -104,5 +145,43 @@ mod tests {
             parse_devices(&output).unwrap_err().code,
             ErrorCode::ToolOutputUnrecognized
         );
+    }
+
+    #[test]
+    fn parses_property_and_console_avd_names() {
+        let property = Output {
+            status: Some(0),
+            stdout: "avdkit_test_phone\n".into(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            parse_avd_name(&property).unwrap().unwrap().as_str(),
+            "avdkit_test_phone"
+        );
+        let console = Output {
+            status: Some(0),
+            stdout: "avdkit_test_phone\nOK\n".into(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            parse_avd_name(&console).unwrap().unwrap().as_str(),
+            "avdkit_test_phone"
+        );
+    }
+
+    #[test]
+    fn requires_both_boot_and_package_manager_signals() {
+        let boot = Output {
+            status: Some(0),
+            stdout: "1\n".into(),
+            stderr: String::new(),
+        };
+        let packages = Output {
+            status: Some(0),
+            stdout: "package:/system/framework/framework-res.apk\n".into(),
+            stderr: String::new(),
+        };
+        assert!(boot_completed(&boot));
+        assert!(package_manager_ready(&packages));
     }
 }
