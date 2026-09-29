@@ -66,6 +66,15 @@ pub fn check_known_errors(output: &Output) -> Result<(), Error> {
     reject_known_error(output, &normalized)
 }
 
+pub fn require_success(output: &Output, action: &str) -> Result<(), Error> {
+    check_known_errors(output)?;
+    if output.status == Some(0) {
+        Ok(())
+    } else {
+        Err(unrecognized(output, action))
+    }
+}
+
 fn reject_known_error(output: &Output, normalized: &NormalizedOutput) -> Result<(), Error> {
     for line in normalized.lines() {
         let lowercase = line.to_ascii_lowercase();

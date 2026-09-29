@@ -3,6 +3,7 @@
 #![allow(clippy::result_large_err)]
 #![deny(missing_docs)]
 
+mod executor;
 mod operation;
 mod planner;
 mod routing;
@@ -11,14 +12,15 @@ use std::sync::{Arc, RwLock};
 
 pub use model::{
     environment_prefix, test_avd_prefix, AndroidCliMetrics, AvdId, BootStatus, Capability,
-    CapabilityId, CapabilityMatrix, CapabilityState, Compensation, CpuArchitecture,
-    CreateDeviceDraft, Description, Device, Diagnostic, Envelope, EnvironmentDiagnostic,
-    EnvironmentDiagnosticCode, EnvironmentReport, EnvironmentSnapshot, EnvironmentValue, Error,
-    ErrorCode, Event, Field, HardwareConfig, Host, KitConfig, LicenseAcceptance, LogStream,
-    ModelError, OperationResult, Package, PackageId, PackageKind, Plan, PlanKind, PlanStep,
-    PlanStepKind, Platform, PlatformPaths, Policy, Profile, ProfileId, Reason, ReasonCode, Remedy,
-    RemedyKind, Revision, RunningInstance, Serial, StartOptions, Timeouts, ToolNames,
-    ToolPreference, ToolSource, ToolState, ToolStatus, ValueSource, PRODUCT_NAME, SCHEMA_VERSION,
+    CapabilityId, CapabilityMatrix, CapabilityState, Compensation, CompensationResult,
+    CpuArchitecture, CreateDeviceDraft, Description, Device, Diagnostic, Envelope,
+    EnvironmentDiagnostic, EnvironmentDiagnosticCode, EnvironmentReport, EnvironmentSnapshot,
+    EnvironmentValue, Error, ErrorCode, Event, Field, HardwareConfig, Host, KitConfig,
+    LicenseAcceptance, LogStream, ModelError, OperationResult, Package, PackageId, PackageKind,
+    Plan, PlanIntent, PlanKind, PlanStep, PlanStepKind, Platform, PlatformPaths, Policy, Profile,
+    ProfileId, Reason, ReasonCode, Remedy, RemedyKind, Revision, RunningInstance, Serial,
+    StartOptions, Timeouts, ToolNames, ToolPreference, ToolSource, ToolState, ToolStatus,
+    ValueSource, PRODUCT_NAME, SCHEMA_VERSION,
 };
 pub use operation::Operation;
 use routing::{Implementation, Router};
@@ -198,7 +200,28 @@ impl Kit {
 
     /// Starts execution of a previously compiled plan.
     pub fn execute_plan(&self, plan: Plan) -> Operation {
-        Operation::not_implemented(format!("execute plan {}", plan.id))
+        if let Err(error) = self.require_capability(CapabilityId::DevicesPlanCreate) {
+            return Operation::failed(error);
+        }
+        let draft = match planner::create_draft(&plan) {
+            Ok(draft) => draft,
+            Err(error) => return Operation::failed(error),
+        };
+        let snapshot = match self.read_report() {
+            Ok(report) => report.snapshot,
+            Err(error) => return Operation::failed(error),
+        };
+        let metrics = self.config.policy.android_cli_metrics;
+        Operation::spawn(move |operation_id, events, cancellation| {
+            Box::pin(executor::execute_create(
+                operation_id,
+                draft,
+                snapshot,
+                metrics,
+                events,
+                cancellation,
+            ))
+        })
     }
 
     /// Starts an operation that deletes an AVD.
@@ -387,6 +410,16 @@ mod tests {
         let error = kit().plan_create(draft).unwrap_err();
         assert_eq!(error.code, ErrorCode::CapabilityUnavailable);
         assert_eq!(error.reasons[0].code, ReasonCode::NotImplemented);
+    }
+
+    #[tokio::test]
+    async fn execute_plan_rejects_a_plan_changed_after_compilation() {
+        let kit = kit();
+        let mut plan = kit.plan_create(draft()).unwrap();
+        plan.steps[0].description = "different action".into();
+        let operation = kit.execute_plan(plan);
+        let error = operation.result().await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidInput);
     }
 
     #[test]

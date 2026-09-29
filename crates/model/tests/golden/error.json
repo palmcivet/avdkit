@@ -3,6 +3,7 @@
   "message": "version output is invalid",
   "reasons": [],
   "failed_step": "read_version",
+  "compensations": [],
   "diagnostic": {
     "command": "android --version",
     "stdout": "unknown\n",

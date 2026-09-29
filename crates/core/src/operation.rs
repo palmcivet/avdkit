@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::{future::Future, pin::Pin};
 
 use model::{Error, ErrorCode, Event, OperationResult};
 use process::CancellationToken;
@@ -42,6 +43,41 @@ impl Operation {
     /// Creates an already-completed unsupported operation.
     pub fn not_implemented(what: impl AsRef<str>) -> Self {
         Self::failed(Error::not_implemented(what))
+    }
+
+    pub(crate) fn spawn<F>(run: F) -> Self
+    where
+        F: FnOnce(
+                String,
+                mpsc::UnboundedSender<Event>,
+                CancellationToken,
+            )
+                -> Pin<Box<dyn Future<Output = Result<OperationResult, Error>> + Send>>
+            + Send
+            + 'static,
+    {
+        let id = Self::next_id();
+        let (event_tx, events) = mpsc::unbounded_channel();
+        let (result_tx, result) = oneshot::channel();
+        let cancellation = CancellationToken::new();
+        let operation = Self {
+            id: id.clone(),
+            events,
+            result,
+            cancellation: cancellation.clone(),
+        };
+        let task = run(id, event_tx, cancellation);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = result_tx.send(task.await);
+            });
+        } else {
+            let _ = result_tx.send(Err(Error::new(
+                ErrorCode::Internal,
+                "an async runtime is required to execute a plan",
+            )));
+        }
+        operation
     }
 
     /// Waits for the next event, returning `None` after the event stream closes.

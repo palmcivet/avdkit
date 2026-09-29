@@ -11,6 +11,7 @@
       }
     ],
     "failed_step": null,
+    "compensations": [],
     "diagnostic": null
   }
 }

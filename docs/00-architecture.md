@@ -116,7 +116,7 @@ model     → 无 workspace 依赖
 - 环境刷新；
 - Android CLI 预设机型查询；
 - AVD 文件设备列表与详情；
-- 创建计划编译，不执行计划。
+- 创建计划编译与执行。
 
 其他公开入口会返回结构化的 `capability_unavailable`，而不是空结果或挂起的任务。
 
@@ -130,3 +130,4 @@ model     → 无 workspace 依赖
 6. [设备文件查询](06-device-files.md)：不依赖工具输出读取 AVD 列表与详情。
 7. [公开基线与契约测试](07-public-baseline.md)：MSRV、文档、golden、CLI 和 blocking 边界。
 8. [环境探测与领域路由](08-environment-routing.md)：来源合并、SDK 选择、包扫描与固定实现选择。
+9. [创建计划执行](09-create-plan-execution.md)：预检、锁、文件事务、事件、取消与补偿。

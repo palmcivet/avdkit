@@ -1,6 +1,7 @@
 use avdkit_model::{
     Capability, CapabilityId, CapabilityMatrix, CapabilityState, Compensation, Diagnostic, Error,
-    ErrorCode, Plan, PlanKind, PlanStep, PlanStepKind, Reason,
+    ErrorCode, HardwareConfig, PackageId, PackageKind, Plan, PlanIntent, PlanKind, PlanStep,
+    PlanStepKind, ProfileId, Reason,
 };
 use serde::Serialize;
 use thiserror as _;
@@ -37,14 +38,50 @@ fn plan_matches_golden_contract() {
     let plan = Plan {
         id: "create:phone_one".into(),
         kind: PlanKind::CreateDevice,
-        steps: vec![PlanStep {
-            id: "create_profile".into(),
-            kind: PlanStepKind::ToolCall,
-            description: "create temporary profile".into(),
-            compensation: Some(Compensation {
-                description: "delete temporary profile".into(),
-            }),
-        }],
+        intent: PlanIntent::CreateDevice {
+            draft: avdkit_model::CreateDeviceDraft {
+                id: avdkit_model::AvdId::new("phone_one").unwrap(),
+                profile: ProfileId::new("medium_phone").unwrap(),
+                image: PackageId {
+                    kind: PackageKind::SystemImage,
+                    api: Some("36".into()),
+                    tag: Some("google_apis".into()),
+                    abi: Some("arm64-v8a".into()),
+                    qualifier: None,
+                },
+                display_name: Some("Phone One".into()),
+                hardware: HardwareConfig::default(),
+            },
+        },
+        steps: vec![
+            PlanStep {
+                id: "create".into(),
+                kind: PlanStepKind::ToolCall,
+                description: "create an AVD from profile medium_phone".into(),
+                compensation: Some(Compensation {
+                    description: "remove the newly created AVD".into(),
+                }),
+            },
+            PlanStep {
+                id: "rename".into(),
+                kind: PlanStepKind::FileRewrite,
+                description: "move the AVD to phone_one".into(),
+                compensation: None,
+            },
+            PlanStep {
+                id: "image".into(),
+                kind: PlanStepKind::FileRewrite,
+                description: "point the AVD at system-images;android-36;google_apis;arm64-v8a"
+                    .into(),
+                compensation: None,
+            },
+            PlanStep {
+                id: "display_name".into(),
+                kind: PlanStepKind::FileRewrite,
+                description: "set display name to Phone One".into(),
+                compensation: None,
+            },
+        ],
     };
 
     assert_golden(&plan, include_str!("golden/plan.json"));

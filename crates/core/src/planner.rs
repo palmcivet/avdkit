@@ -1,4 +1,7 @@
-use model::{Compensation, CreateDeviceDraft, Plan, PlanKind, PlanStep, PlanStepKind};
+use model::{
+    Compensation, CreateDeviceDraft, Error, ErrorCode, Plan, PlanIntent, PlanKind, PlanStep,
+    PlanStepKind,
+};
 
 pub fn compile_create(draft: &CreateDeviceDraft) -> Plan {
     let display = draft
@@ -8,6 +11,9 @@ pub fn compile_create(draft: &CreateDeviceDraft) -> Plan {
     Plan {
         id: format!("create:{}", draft.id),
         kind: PlanKind::CreateDevice,
+        intent: PlanIntent::CreateDevice {
+            draft: draft.clone(),
+        },
         steps: vec![
             PlanStep {
                 id: "create".into(),
@@ -37,4 +43,19 @@ pub fn compile_create(draft: &CreateDeviceDraft) -> Plan {
             },
         ],
     }
+}
+
+pub fn create_draft(plan: &Plan) -> Result<CreateDeviceDraft, Error> {
+    let PlanIntent::CreateDevice { draft } = &plan.intent;
+    if !draft.hardware.is_default() {
+        return Err(Error::not_implemented("custom hardware"));
+    }
+    let expected = compile_create(draft);
+    if plan != &expected {
+        return Err(Error::new(
+            ErrorCode::InvalidInput,
+            "plan contents do not match its compiled intent",
+        ));
+    }
+    Ok(draft.clone())
 }

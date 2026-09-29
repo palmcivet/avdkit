@@ -28,6 +28,22 @@ pub enum Event {
         /// Human-readable completion description.
         message: String,
     },
+    /// Reversal of a completed step began.
+    CompensationStarted {
+        /// Stable identifier of the step being reversed.
+        step: String,
+        /// Human-readable compensation description.
+        message: String,
+    },
+    /// Reversal of a completed step finished.
+    CompensationFinished {
+        /// Stable identifier of the step being reversed.
+        step: String,
+        /// Whether compensation succeeded.
+        succeeded: bool,
+        /// Human-readable outcome.
+        message: String,
+    },
     /// Overall operation progress changed.
     Progress {
         /// Fraction from zero through one, or `None` when indeterminate.

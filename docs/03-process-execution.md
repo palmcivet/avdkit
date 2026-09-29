@@ -106,7 +106,7 @@ Swift Task / CLI 信号
 
 UniFFI 生成的 Swift async 桥接不会自动传播 `Task.cancel()`。Swift 易用层必须使用 `withTaskCancellationHandler` 调用 `Operation.cancel()`；验证代码在 `experiments/uniffi-swift/`，结果见[实测记录](findings/uniffi-swift.md)。
 
-进程执行、驱动和 `Operation` 已经使用同一种令牌，但当前公开长任务尚未接入真实工具，所以这条完整链路目前只在技术验证中实际启动过子进程。
+创建计划执行已经用这条链路运行 Android CLI；取消创建会终止工具进程组，并在需要时清理部分创建的 AVD。Swift Task 到 `Operation.cancel()` 的桥接仍只在独立实验中验证。
 
 ## 为什么终止进程组
 

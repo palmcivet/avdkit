@@ -43,11 +43,12 @@ pub use environment::{
     CapabilityMatrix, EnvironmentDiagnostic, EnvironmentDiagnosticCode, EnvironmentReport,
     EnvironmentSnapshot, EnvironmentValue, ToolSource, ToolState, ToolStatus, ValueSource,
 };
-pub use error::{Diagnostic, Error, ErrorCode, ModelError};
+pub use error::{CompensationResult, Diagnostic, Error, ErrorCode, ModelError};
 pub use event::{Event, LogStream};
 pub use field::Field;
 pub use host::{CpuArchitecture, Description, Host, Platform, PlatformPaths, ToolNames};
 pub use ids::{AvdId, PackageId, PackageKind, ProfileId, Revision, Serial};
 pub use plan::{
-    Compensation, CreateDeviceDraft, OperationResult, Plan, PlanKind, PlanStep, PlanStepKind,
+    Compensation, CreateDeviceDraft, OperationResult, Plan, PlanIntent, PlanKind, PlanStep,
+    PlanStepKind,
 };

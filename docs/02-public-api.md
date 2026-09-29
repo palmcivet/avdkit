@@ -121,9 +121,9 @@ let result = operation.result().await?;
 operation.cancel();
 ```
 
-`Operation`、驱动和进程执行层使用同一种取消令牌；接入真实长任务后，取消会沿这条链路终止进程组，最终结果使用 `cancelled`。
+`Operation`、计划执行器、驱动和进程执行层使用同一种取消令牌。创建计划执行期间，取消会沿这条链路终止 Android CLI 进程组，最终结果使用 `cancelled`。
 
-当前有副作用的长任务尚未接入真实驱动，因此公开入口还不会启动工具进程。调用这些入口会得到会正常结束的 `Operation`，最终错误为 `capability_unavailable`，不会无限等待。完整取消链路已经由独立 UniFFI 实验验证。
+安装、删除、启动和停止入口尚未接入真实驱动。调用这些入口会得到会正常结束的 `Operation`，最终错误为 `capability_unavailable`，不会无限等待。
 
 ### 组合操作：先生成 `Plan`
 
@@ -136,11 +136,12 @@ let plan = kit.plan_create(draft)?;
 `Plan` 是可序列化数据，包含：
 
 - 计划类型和稳定 ID；
+- 可序列化的领域意图；
 - 有序步骤；
 - 每步的类型与描述；
 - 可以执行的补偿动作。
 
-调用方可以在产生副作用前展示、记录或审批计划。当前创建计划可以编译，但 `execute_plan` 尚未执行真实步骤。自定义硬件配置会明确返回 `capability_unavailable`，而不是被忽略。
+调用方可以在产生副作用前展示、记录或审批计划，再用 `execute_plan` 启动执行。执行器会从领域意图重新编译并验证公开步骤未被修改，然后完成预检、Android CLI 创建和文件事务。自定义硬件配置会明确返回 `capability_unavailable`，而不是被忽略。
 
 创建计划目前只在受支持的平台上开放；它不要求 Android 工具已经安装。未支持平台的 `devices_plan_create` 能力包含 `platform_not_supported`。
 
@@ -173,6 +174,7 @@ let plan = kit.plan_create(draft)?;
 - `message`：用于展示或日志；
 - `reasons`：能力不可用的结构化原因；
 - `failed_step`：组合计划失败的位置；
+- `compensations`：原始失败后各项补偿的成功状态和消息；
 - `diagnostic`：可选的底层命令、stdout、stderr 和退出状态。
 
 常见错误码：

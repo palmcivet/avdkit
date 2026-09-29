@@ -1,14 +1,53 @@
 {
   "id": "create:phone_one",
   "kind": "create_device",
+  "intent": {
+    "kind": "create_device",
+    "draft": {
+      "id": "phone_one",
+      "profile": "medium_phone",
+      "image": {
+        "kind": "system_image",
+        "api": "36",
+        "tag": "google_apis",
+        "abi": "arm64-v8a",
+        "qualifier": null
+      },
+      "display_name": "Phone One",
+      "hardware": {
+        "ram_mib": null,
+        "cpu_count": null,
+        "screen_width": null,
+        "screen_height": null
+      }
+    }
+  },
   "steps": [
     {
-      "id": "create_profile",
+      "id": "create",
       "kind": "tool_call",
-      "description": "create temporary profile",
+      "description": "create an AVD from profile medium_phone",
       "compensation": {
-        "description": "delete temporary profile"
+        "description": "remove the newly created AVD"
       }
+    },
+    {
+      "id": "rename",
+      "kind": "file_rewrite",
+      "description": "move the AVD to phone_one",
+      "compensation": null
+    },
+    {
+      "id": "image",
+      "kind": "file_rewrite",
+      "description": "point the AVD at system-images;android-36;google_apis;arm64-v8a",
+      "compensation": null
+    },
+    {
+      "id": "display_name",
+      "kind": "file_rewrite",
+      "description": "set display name to Phone One",
+      "compensation": null
     }
   ]
 }

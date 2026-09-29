@@ -4,11 +4,16 @@
 
 use std::{
     fmt::Write,
-    fs, io,
+    fs,
+    fs::OpenOptions,
+    io::{self, Write as IoWrite},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use model::{AvdId, Error, ErrorCode, PackageId, PackageKind, ProfileId};
+
+static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Line {
@@ -157,6 +162,14 @@ impl AvdStore {
         self.read_index(id.clone(), &index)
     }
 
+    pub fn contains_paths(&self, id: &AvdId) -> Result<bool, Error> {
+        let index = self.root.join(format!("{id}.ini"));
+        let directory = self.root.join(format!("{id}.avd"));
+        path_exists(&index).and_then(|index_exists| {
+            path_exists(&directory).map(|directory_exists| index_exists || directory_exists)
+        })
+    }
+
     fn read_index(&self, id: AvdId, index_path: &Path) -> Result<AvdMetadata, Error> {
         let index = read_ini(index_path, "read AVD index")?;
         let directory = index
@@ -208,10 +221,320 @@ impl AvdStore {
     }
 }
 
+#[derive(Debug)]
+pub struct CreateTransaction {
+    root: PathBuf,
+    source_id: AvdId,
+    target_id: AvdId,
+    source_directory: PathBuf,
+    target_directory: PathBuf,
+    backup_root: PathBuf,
+    moved: bool,
+}
+
+impl CreateTransaction {
+    pub fn begin(
+        root: impl Into<PathBuf>,
+        user_root: impl Into<PathBuf>,
+        backup_root: impl Into<PathBuf>,
+        source_id: AvdId,
+        target_id: AvdId,
+    ) -> Result<Self, Error> {
+        let root = root.into();
+        let user_root = user_root.into();
+        let backup_root = backup_root.into();
+        let source_index = root.join(format!("{source_id}.ini"));
+        let index = read_ini(&source_index, "read newly created AVD index")?;
+        let source_directory = index
+            .get("path")
+            .map(PathBuf::from)
+            .or_else(|| index.get("path.rel").map(|path| user_root.join(path)))
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::PreconditionFailed,
+                    format!("new AVD index {} has no path", source_index.display()),
+                )
+            })?;
+        let expected_directory = root.join(format!("{source_id}.avd"));
+        if source_directory != expected_directory {
+            return Err(Error::new(
+                ErrorCode::PreconditionFailed,
+                format!(
+                    "new AVD directory {} did not match expected path {}",
+                    source_directory.display(),
+                    expected_directory.display()
+                ),
+            ));
+        }
+        let source_config = source_directory.join("config.ini");
+        if !source_config.is_file() {
+            return Err(Error::new(
+                ErrorCode::PreconditionFailed,
+                format!("new AVD config {} was not created", source_config.display()),
+            ));
+        }
+
+        fs::create_dir_all(&backup_root).map_err(|error| {
+            io_error("create transaction backup directory", &backup_root, error)
+        })?;
+        let backup_result = fs::copy(&source_index, backup_root.join("index.ini"))
+            .map_err(|error| io_error("back up AVD index", &source_index, error))
+            .and_then(|_| {
+                fs::copy(&source_config, backup_root.join("config.ini"))
+                    .map_err(|error| io_error("back up AVD config", &source_config, error))
+            });
+        if let Err(error) = backup_result {
+            let _ = fs::remove_dir_all(&backup_root);
+            return Err(error);
+        }
+
+        let target_directory = root.join(format!("{target_id}.avd"));
+        Ok(Self {
+            root,
+            source_id,
+            target_id,
+            source_directory,
+            target_directory,
+            backup_root,
+            moved: false,
+        })
+    }
+
+    pub fn rename(&mut self) -> Result<(), Error> {
+        if self.source_id != self.target_id {
+            fs::rename(&self.source_directory, &self.target_directory).map_err(|error| {
+                io_error(
+                    "move temporary AVD directory",
+                    &self.source_directory,
+                    error,
+                )
+            })?;
+            let source_index = self.source_index();
+            if let Err(error) = fs::rename(&source_index, self.target_index()) {
+                let _ = fs::rename(&self.target_directory, &self.source_directory);
+                return Err(io_error("move temporary AVD index", &source_index, error));
+            }
+        }
+        self.moved = true;
+
+        let mut index = read_ini(&self.target_index(), "read moved AVD index")?;
+        index.set("path", &self.target_directory.to_string_lossy());
+        if let Some(relative) = index.get("path.rel").map(str::to_owned) {
+            let replacement = Path::new(&relative)
+                .parent()
+                .map_or_else(
+                    || PathBuf::from(format!("{}.avd", self.target_id)),
+                    |parent| parent.join(format!("{}.avd", self.target_id)),
+                )
+                .to_string_lossy()
+                .into_owned();
+            index.set("path.rel", &replacement);
+        }
+        atomic_write(&self.target_index(), &index.render())?;
+
+        let config_path = self.target_directory.join("config.ini");
+        let mut config = read_ini(&config_path, "read moved AVD config")?;
+        config.set("AvdId", self.target_id.as_str());
+        atomic_write(&config_path, &config.render())
+    }
+
+    pub fn set_image(&mut self, image: &PackageId) -> Result<(), Error> {
+        let (target, tag, tag_display) = image_values(image)?;
+        let config_path = self.target_directory.join("config.ini");
+        let mut config = read_ini(&config_path, "read AVD config for image rewrite")?;
+        config.set("image.sysdir.1", &format!("{}/", image.render_slash()));
+        config.set("tag.id", tag);
+        config.set("tag.ids", tag);
+        config.set("tag.display", &tag_display);
+        config.set("tag.displaynames", &tag_display);
+        config.set(
+            "PlayStore.enabled",
+            if tag.contains("playstore") {
+                "true"
+            } else {
+                "false"
+            },
+        );
+        config.set("target", &target);
+        atomic_write(&config_path, &config.render())?;
+
+        let index_path = self.target_index();
+        let mut index = read_ini(&index_path, "read AVD index for target rewrite")?;
+        index.set("target", &target);
+        atomic_write(&index_path, &index.render())
+    }
+
+    pub fn set_display_name(&mut self, display_name: &str) -> Result<(), Error> {
+        let config_path = self.target_directory.join("config.ini");
+        let mut config = read_ini(&config_path, "read AVD config for display name rewrite")?;
+        config.set("avd.ini.displayname", display_name);
+        atomic_write(&config_path, &config.render())
+    }
+
+    pub fn compensate(&mut self) -> Result<(), Error> {
+        let mut failures = Vec::new();
+        if self.moved {
+            if let Err(error) = self.restore_backups() {
+                failures.push(error.message);
+            }
+        }
+        for path in [
+            self.target_index(),
+            self.source_index(),
+            self.target_directory.clone(),
+            self.source_directory.clone(),
+        ] {
+            if let Err(error) = remove_path_if_present(&path) {
+                failures.push(error.message);
+            }
+        }
+        if let Err(error) = remove_path_if_present(&self.backup_root) {
+            failures.push(error.message);
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::new(ErrorCode::Internal, failures.join("; ")))
+        }
+    }
+
+    pub fn commit(&mut self) -> Result<(), Error> {
+        remove_path_if_present(&self.backup_root)
+    }
+
+    fn restore_backups(&self) -> Result<(), Error> {
+        let index_path = self.target_index();
+        let config_path = self.target_directory.join("config.ini");
+        let index = fs::read_to_string(self.backup_root.join("index.ini"))
+            .map_err(|error| io_error("read AVD index backup", &self.backup_root, error))?;
+        let config = fs::read_to_string(self.backup_root.join("config.ini"))
+            .map_err(|error| io_error("read AVD config backup", &self.backup_root, error))?;
+        atomic_write(&index_path, &index)?;
+        atomic_write(&config_path, &config)
+    }
+
+    fn source_index(&self) -> PathBuf {
+        self.root.join(format!("{}.ini", self.source_id))
+    }
+
+    fn target_index(&self) -> PathBuf {
+        self.root.join(format!("{}.ini", self.target_id))
+    }
+}
+
+pub fn remove_created_artifacts(root: &Path, id: &AvdId) -> Result<(), Error> {
+    let mut failures = Vec::new();
+    for path in [
+        root.join(format!("{id}.ini")),
+        root.join(format!("{id}.avd")),
+    ] {
+        if let Err(error) = remove_path_if_present(&path) {
+            failures.push(error.message);
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::new(ErrorCode::Internal, failures.join("; ")))
+    }
+}
+
 fn read_ini(path: &Path, action: &str) -> Result<IniDocument, Error> {
     fs::read_to_string(path)
         .map(|contents| IniDocument::parse(&contents))
         .map_err(|error| io_error(action, path, error))
+}
+
+fn image_values(image: &PackageId) -> Result<(String, &str, String), Error> {
+    if image.kind != PackageKind::SystemImage {
+        return Err(Error::new(
+            ErrorCode::InvalidInput,
+            "device image must be a system image",
+        ));
+    }
+    let api = image
+        .api
+        .as_deref()
+        .ok_or_else(|| Error::new(ErrorCode::InvalidInput, "device image API is missing"))?;
+    let tag = image
+        .tag
+        .as_deref()
+        .ok_or_else(|| Error::new(ErrorCode::InvalidInput, "device image tag is missing"))?;
+    if image.abi.is_none() {
+        return Err(Error::new(
+            ErrorCode::InvalidInput,
+            "device image ABI is missing",
+        ));
+    }
+    let target = if api.starts_with("android-") {
+        api.to_owned()
+    } else {
+        format!("android-{api}")
+    };
+    let display = match tag {
+        "google_apis_playstore" => "Google Play".into(),
+        "google_apis" => "Google APIs".into(),
+        "default" => "Default Android System Image".into(),
+        _ => tag
+            .split('_')
+            .map(|part| {
+                let mut characters = part.chars();
+                characters.next().map_or_else(String::new, |first| {
+                    first.to_uppercase().collect::<String>() + characters.as_str()
+                })
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    };
+    Ok((target, tag, display))
+}
+
+fn atomic_write(path: &Path, contents: &str) -> Result<(), Error> {
+    let parent = path.parent().ok_or_else(|| {
+        Error::new(
+            ErrorCode::Internal,
+            format!("file {} has no parent directory", path.display()),
+        )
+    })?;
+    let temporary = parent.join(format!(
+        ".{}.{}.tmp",
+        model::PRODUCT_NAME,
+        NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| io_error("create temporary AVD file", &temporary, error))?;
+        file.write_all(contents.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| io_error("write temporary AVD file", &temporary, error))?;
+        fs::rename(&temporary, path).map_err(|error| io_error("replace AVD file", path, error))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn path_exists(path: &Path) -> Result<bool, Error> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(io_error("inspect AVD path", path, error)),
+    }
+}
+
+fn remove_path_if_present(path: &Path) -> Result<(), Error> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            fs::remove_dir_all(path).map_err(|error| io_error("remove AVD directory", path, error))
+        }
+        Ok(_) => fs::remove_file(path).map_err(|error| io_error("remove AVD file", path, error)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error("inspect AVD path for removal", path, error)),
+    }
 }
 
 fn nonempty(value: Option<&str>) -> Option<String> {

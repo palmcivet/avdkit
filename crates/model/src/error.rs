@@ -5,6 +5,17 @@ use thiserror::Error as ThisError;
 
 use crate::capability::Reason;
 
+/// Outcome of an attempted plan compensation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompensationResult {
+    /// Step whose completed work was being reversed.
+    pub step: String,
+    /// Whether the compensation completed successfully.
+    pub succeeded: bool,
+    /// Human-readable outcome or failure detail.
+    pub message: String,
+}
+
 /// Stable machine-readable category for an operation failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -91,6 +102,8 @@ pub struct Error {
     pub reasons: Vec<Reason>,
     /// Plan step that failed, when applicable.
     pub failed_step: Option<String>,
+    /// Compensations attempted after the original plan failure.
+    pub compensations: Vec<CompensationResult>,
     /// Optional low-level troubleshooting context.
     pub diagnostic: Option<Diagnostic>,
 }
@@ -103,6 +116,7 @@ impl Error {
             message: message.into(),
             reasons: Vec::new(),
             failed_step: None,
+            compensations: Vec::new(),
             diagnostic: None,
         }
     }
@@ -114,6 +128,7 @@ impl Error {
             message: message.into(),
             reasons,
             failed_step: None,
+            compensations: Vec::new(),
             diagnostic: None,
         }
     }

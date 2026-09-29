@@ -28,6 +28,17 @@ pub enum PlanKind {
     CreateDevice,
 }
 
+/// Serializable domain input retained so an approved plan can be executed later.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlanIntent {
+    /// Create a configured virtual device.
+    CreateDevice {
+        /// Validated creation request.
+        draft: CreateDeviceDraft,
+    },
+}
+
 /// Execution mechanism used by a plan step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -67,6 +78,8 @@ pub struct Plan {
     pub id: String,
     /// High-level operation.
     pub kind: PlanKind,
+    /// Domain input used to recompile private executable steps.
+    pub intent: PlanIntent,
     /// Ordered execution steps.
     pub steps: Vec<PlanStep>,
 }
