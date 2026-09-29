@@ -95,11 +95,15 @@ pub struct AvdMetadata {
 #[derive(Debug, Clone)]
 pub struct AvdStore {
     root: PathBuf,
+    user_root: PathBuf,
 }
 
 impl AvdStore {
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+    pub fn new(root: impl Into<PathBuf>, user_root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            user_root: user_root.into(),
+        }
     }
 
     pub fn list(&self) -> Result<Vec<AvdMetadata>, Error> {
@@ -161,7 +165,7 @@ impl AvdStore {
             .or_else(|| {
                 index
                     .get("path.rel")
-                    .map(|relative| self.root.parent().unwrap_or(&self.root).join(relative))
+                    .map(|relative| self.user_root.join(relative))
             })
             .ok_or_else(|| {
                 Error::new(
@@ -296,7 +300,7 @@ mod tests {
         )
         .unwrap();
 
-        let device = AvdStore::new(&root)
+        let device = AvdStore::new(&root, &root)
             .get(&AvdId::new(&device_id).unwrap())
             .unwrap();
         assert_eq!(device.id.as_str(), device_id);
@@ -318,7 +322,7 @@ mod tests {
     #[test]
     fn list_is_sorted_and_missing_root_is_empty() {
         let root = temp_root();
-        assert!(AvdStore::new(&root).list().unwrap().is_empty());
+        assert!(AvdStore::new(&root, &root).list().unwrap().is_empty());
         fs::create_dir_all(&root).unwrap();
         for suffix in ["z", "a"] {
             let id = test_id(suffix);
@@ -332,7 +336,7 @@ mod tests {
         }
         fs::write(root.join("unrelated.txt"), "ignored").unwrap();
 
-        let devices = AvdStore::new(&root).list().unwrap();
+        let devices = AvdStore::new(&root, &root).list().unwrap();
         assert_eq!(devices.len(), 2);
         assert_eq!(devices[0].id.as_str(), test_id("a"));
         assert_eq!(devices[1].id.as_str(), test_id("z"));
@@ -344,7 +348,7 @@ mod tests {
     fn missing_device_has_a_stable_error() {
         let root = temp_root();
         let id = AvdId::new(test_id("missing")).unwrap();
-        let error = AvdStore::new(root).get(&id).unwrap_err();
+        let error = AvdStore::new(&root, &root).get(&id).unwrap_err();
         assert_eq!(error.code, ErrorCode::DeviceNotFound);
     }
 
@@ -355,9 +359,34 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join(format!("{id}.ini")), "target=android-36\n").unwrap();
 
-        let error = AvdStore::new(&root).get(&id).unwrap_err();
+        let error = AvdStore::new(&root, &root).get(&id).unwrap_err();
         assert_eq!(error.code, ErrorCode::PreconditionFailed);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolves_relative_paths_from_the_android_user_directory() {
+        let base = temp_root();
+        let avd_root = base.join("custom-avd-home");
+        let user_root = base.join("android-user-home");
+        let device_id = test_id("relative");
+        let directory = user_root.join("avd/relative.avd");
+        fs::create_dir_all(&avd_root).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            avd_root.join(format!("{device_id}.ini")),
+            "path.rel=avd/relative.avd\n",
+        )
+        .unwrap();
+        fs::write(directory.join("config.ini"), "target=android-36\n").unwrap();
+
+        let device = AvdStore::new(&avd_root, &user_root)
+            .get(&AvdId::new(&device_id).unwrap())
+            .unwrap();
+        assert_eq!(device.directory, directory);
+        assert_eq!(device.target.as_deref(), Some("android-36"));
+
+        fs::remove_dir_all(base).unwrap();
     }
 }

@@ -141,7 +141,7 @@ fn state_for(id: CapabilityId, snapshot: &EnvironmentSnapshot) -> CapabilityStat
                 implementation: "avd_files".into(),
             }
         }
-        CapabilityId::DevicesPlanCreate => CapabilityState::Available {
+        CapabilityId::DevicesPlanCreate if snapshot.host.supported => CapabilityState::Available {
             implementation: "plan_compiler".into(),
         },
         other => CapabilityState::Unavailable {
@@ -180,7 +180,10 @@ fn unavailable_reasons(id: CapabilityId, snapshot: &EnvironmentSnapshot) -> Vec<
 fn is_implemented(id: CapabilityId) -> bool {
     matches!(
         id,
-        CapabilityId::DevicesList | CapabilityId::DevicesGet | CapabilityId::DevicesProfiles
+        CapabilityId::DevicesList
+            | CapabilityId::DevicesGet
+            | CapabilityId::DevicesProfiles
+            | CapabilityId::DevicesPlanCreate
     )
 }
 
@@ -200,6 +203,7 @@ fn needs_official_tools(id: CapabilityId) -> bool {
             | CapabilityId::Refresh
             | CapabilityId::DevicesList
             | CapabilityId::DevicesGet
+            | CapabilityId::DevicesPlanCreate
     )
 }
 
@@ -330,6 +334,33 @@ mod tests {
                     .map(|capability| &capability.state),
                 Some(CapabilityState::Available { implementation }) if implementation == "avd_files"
             ));
+        }
+    }
+
+    #[test]
+    fn plan_compilation_requires_a_supported_platform_but_no_tools() {
+        let supported = capabilities(&snapshot(true, false));
+        assert!(matches!(
+            supported
+                .iter()
+                .find(|capability| capability.id == CapabilityId::DevicesPlanCreate)
+                .map(|capability| &capability.state),
+            Some(CapabilityState::Available { implementation }) if implementation == "plan_compiler"
+        ));
+
+        let unsupported = capabilities(&snapshot(false, false));
+        let plan_create = unsupported
+            .iter()
+            .find(|capability| capability.id == CapabilityId::DevicesPlanCreate)
+            .unwrap();
+        match &plan_create.state {
+            CapabilityState::Unavailable { reasons } => {
+                assert_eq!(reasons.len(), 1);
+                assert_eq!(reasons[0].code, ReasonCode::PlatformNotSupported);
+            }
+            CapabilityState::Available { .. } => {
+                panic!("plan compilation should be unavailable on unsupported platforms");
+            }
         }
     }
 

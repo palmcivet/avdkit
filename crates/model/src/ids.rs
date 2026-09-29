@@ -1,10 +1,10 @@
 use std::{cmp::Ordering, fmt, str::FromStr};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::ModelError;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct AvdId(String);
 
@@ -31,7 +31,7 @@ impl fmt::Display for AvdId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct Serial(String);
 
@@ -55,7 +55,7 @@ impl fmt::Display for Serial {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ProfileId(String);
 
@@ -78,6 +78,24 @@ impl fmt::Display for ProfileId {
         self.0.fmt(f)
     }
 }
+
+macro_rules! deserialize_validated_identifier {
+    ($identifier:ty) => {
+        impl<'de> Deserialize<'de> for $identifier {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let value = String::deserialize(deserializer)?;
+                Self::new(value).map_err(serde::de::Error::custom)
+            }
+        }
+    };
+}
+
+deserialize_validated_identifier!(AvdId);
+deserialize_validated_identifier!(Serial);
+deserialize_validated_identifier!(ProfileId);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageId {
@@ -240,5 +258,15 @@ mod tests {
             id.render_slash(),
             "system-images/android-36.1/google_apis/arm64-v8a"
         );
+    }
+
+    #[test]
+    fn identifier_deserialization_preserves_constructor_invariants() {
+        assert!(serde_json::from_str::<AvdId>(r#""../phone""#).is_err());
+        assert!(serde_json::from_str::<Serial>(r#""""#).is_err());
+        assert!(serde_json::from_str::<ProfileId>(r#""""#).is_err());
+
+        let id = serde_json::from_str::<AvdId>(r#""phone""#).unwrap();
+        assert_eq!(id.as_str(), "phone");
     }
 }

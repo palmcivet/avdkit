@@ -80,17 +80,23 @@ impl Kit {
     pub async fn list_devices(&self) -> Result<Vec<Device>, Error> {
         self.require_capability(CapabilityId::DevicesList)?;
         let report = self.read_report()?;
-        avdfs::AvdStore::new(report.snapshot.paths.avd_root)
-            .list()
-            .map(|devices| devices.into_iter().map(device_from_metadata).collect())
+        avdfs::AvdStore::new(
+            report.snapshot.paths.avd_root,
+            report.snapshot.paths.user_root,
+        )
+        .list()
+        .map(|devices| devices.into_iter().map(device_from_metadata).collect())
     }
 
     pub async fn get_device(&self, id: &AvdId) -> Result<Device, Error> {
         self.require_capability(CapabilityId::DevicesGet)?;
         let report = self.read_report()?;
-        avdfs::AvdStore::new(report.snapshot.paths.avd_root)
-            .get(id)
-            .map(device_from_metadata)
+        avdfs::AvdStore::new(
+            report.snapshot.paths.avd_root,
+            report.snapshot.paths.user_root,
+        )
+        .get(id)
+        .map(device_from_metadata)
     }
 
     pub async fn profiles(&self) -> Result<Vec<Profile>, Error> {

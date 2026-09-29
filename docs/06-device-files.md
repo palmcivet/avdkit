@@ -90,10 +90,13 @@ system-images/android-36/google_apis/arm64-v8a/
 
 - AVD 根目录不存在：设备列表为空；
 - 指定 ID 的索引不存在：`device_not_found`；
+- 指定 ID 的索引路径存在但不是普通文件：`precondition_failed`；
 - 索引既没有 `path` 也没有 `path.rel`：`precondition_failed`；
 - `config.ini` 不存在：设备仍返回，但配置字段为 `unavailable`；
 - 文件存在但无法读取：`internal`，消息包含失败路径和 I/O 原因；
 - 单个配置键不存在或无法解析：对应公共字段为 `unavailable`。
+
+列表会忽略文件名不能构成合法 AVD ID 的 `.ini`。合法 ID 的索引一旦无法读取或缺少路径，整个列表查询返回相应错误，不返回不完整的部分结果。
 
 列表按 AVD ID 排序，因此文件系统枚举顺序不会影响 Rust 或 JSON 输出。
 
@@ -157,6 +160,7 @@ Kit.list_devices / Kit.get_device
 单元测试只在临时目录中创建带 `test_avd_prefix()` 派生前缀的 AVD 索引和配置。测试覆盖：
 
 - `path` 指向非相邻目录；
+- 自定义 AVD 根目录下的 `path.rel` 仍相对于 Android 用户目录解析；
 - 显示名称、机型、镜像和 target 映射；
 - 稳定排序；
 - 空目录；

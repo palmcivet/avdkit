@@ -80,7 +80,7 @@ flowchart LR
 
 ### 出口：`cli`、`ffi`
 
-`cli` 将 `Kit` 映射为人类可读输出和带 `schema_version` 的 JSON。当前提供环境、能力、刷新和预设机型查询。
+`cli` 将 `Kit` 映射为人类可读输出和带 `schema_version` 的 JSON。当前提供环境、能力、刷新、AVD 文件设备列表与详情，以及预设机型查询。
 
 `ffi` 是语言绑定边界。正式 UniFFI 导出尚未接入；跨语言 async、取消和 XCFramework 已通过独立实验验证。
 
@@ -89,20 +89,20 @@ flowchart LR
 依赖始终从出口和领域层指向基础层，不能反向引用：
 
 ```text
-cli / ffi
-    ↓
-core
-    ↓
-env / drivers / avdfs
-    ↓
-process / platform
-    ↓
-model
+cli / ffi → core
+core      → env, drivers, avdfs, process, model
+env       → platform, model
+drivers   → process, model
+avdfs     → model
+process   → platform, model
+platform  → model
+model     → 无 workspace 依赖
 ```
 
 额外约束：
 
 - `model` 不依赖任何 workspace crate；
+- 每个内部 crate 只声明实际使用的依赖，避免层次边界随 Cargo 依赖图漂移；
 - 目标操作系统条件分支只出现在 `platform`；
 - `drivers` 不依赖 `core`，避免把领域策略写进工具解析；
 - 所有出口复用 `model`，不各自发明错误和字段。

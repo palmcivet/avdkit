@@ -135,6 +135,8 @@ let plan = kit.plan_create(draft)?;
 
 调用方可以在产生副作用前展示、记录或审批计划。当前创建计划可以编译，但 `execute_plan` 尚未执行真实步骤。自定义硬件配置会明确返回 `capability_unavailable`，而不是被忽略。
 
+创建计划目前只在受支持的平台上开放；它不要求 Android 工具已经安装。未支持平台的 `devices_plan_create` 能力包含 `platform_not_supported`。
+
 ## 可选字段不是 `null`
 
 不同工具能提供的信息不同。公共模型使用 `Field<T>` 表达三种情况：

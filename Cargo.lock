@@ -60,7 +60,6 @@ dependencies = [
  "avdkit-drivers",
  "avdkit-env",
  "avdkit-model",
- "avdkit-platform",
  "avdkit-process",
  "serde_json",
  "tokio",
@@ -97,11 +96,8 @@ dependencies = [
 name = "avdkit-env"
 version = "0.1.0"
 dependencies = [
- "avdkit-avdfs",
- "avdkit-drivers",
  "avdkit-model",
  "avdkit-platform",
- "avdkit-process",
 ]
 
 [[package]]

@@ -10,7 +10,6 @@ avdfs = { package = "avdkit-avdfs", path = "../avdfs" }
 drivers = { package = "avdkit-drivers", path = "../drivers" }
 environment = { package = "avdkit-env", path = "../env" }
 model = { package = "avdkit-model", path = "../model" }
-platform = { package = "avdkit-platform", path = "../platform" }
 process = { package = "avdkit-process", path = "../process" }
 tokio.workspace = true
 
