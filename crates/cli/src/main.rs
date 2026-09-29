@@ -1,5 +1,9 @@
+#![allow(clippy::result_large_err)]
+
+use std::process::ExitCode;
+
 use clap::{Parser, Subcommand};
-use kit::{AvdId, Envelope, Field, Kit, KitConfig};
+use kit::{AvdId, Envelope, Error, Field, Kit, KitConfig};
 
 #[derive(Debug, Parser)]
 #[command(name = "avdkit", version, about = "Android virtual device management")]
@@ -29,15 +33,29 @@ enum DevicesCommand {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> ExitCode {
     let cli = Cli::parse();
-    let kit = Kit::new(KitConfig::default())?;
+    let json = cli.json;
+    match run(cli).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            if json {
+                eprintln!("{}", render_json(&Envelope::new(error)));
+            } else {
+                eprintln!("{error}");
+            }
+            ExitCode::from(1)
+        }
+    }
+}
 
+async fn run(cli: Cli) -> Result<(), Error> {
+    let kit = Kit::new_async(KitConfig::default()).await?;
     match cli.command.unwrap_or(Command::Environment) {
         Command::Environment => {
             let report = kit.environment().await?;
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&Envelope::new(&report))?);
+                println!("{}", render_json(&Envelope::new(&report)));
             } else {
                 println!(
                     "host: {:?} {:?}",
@@ -46,8 +64,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("sdk: {}", report.snapshot.paths.sdk_root.display());
                 for tool in report.snapshot.tools {
                     println!(
-                        "{}: {}",
+                        "{}: {:?} {}",
                         tool.name,
+                        tool.state,
                         tool.path
                             .map_or_else(|| "missing".into(), |path| path.display().to_string())
                     );
@@ -57,10 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Capabilities => {
             let capabilities = kit.capabilities().await?;
             if cli.json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&Envelope::new(&capabilities))?
-                );
+                println!("{}", render_json(&Envelope::new(&capabilities)));
             } else {
                 for capability in capabilities {
                     println!("{}: {:?}", capability.id.as_str(), capability.state);
@@ -70,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Refresh => {
             let report = kit.refresh().await?;
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&Envelope::new(&report))?);
+                println!("{}", render_json(&Envelope::new(&report)));
             } else {
                 println!("environment refreshed");
             }
@@ -79,10 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             DevicesCommand::List => {
                 let devices = kit.list_devices().await?;
                 if cli.json {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&Envelope::new(&devices))?
-                    );
+                    println!("{}", render_json(&Envelope::new(&devices)));
                 } else {
                     for device in devices {
                         match device.display_name {
@@ -93,9 +106,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             DevicesCommand::Get { id } => {
-                let device = kit.get_device(&AvdId::new(id)?).await?;
+                let device = kit
+                    .get_device(&AvdId::new(id).map_err(Error::from)?)
+                    .await?;
                 if cli.json {
-                    println!("{}", serde_json::to_string_pretty(&Envelope::new(&device))?);
+                    println!("{}", render_json(&Envelope::new(&device)));
                 } else {
                     println!("id: {}", device.id);
                     if let Field::Present { value } = device.display_name {
@@ -115,10 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             DevicesCommand::Profiles => {
                 let profiles = kit.profiles().await?;
                 if cli.json {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&Envelope::new(&profiles))?
-                    );
+                    println!("{}", render_json(&Envelope::new(&profiles)));
                 } else {
                     for profile in profiles {
                         println!("{}", profile.id);
@@ -128,4 +140,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     }
     Ok(())
+}
+
+fn render_json<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string_pretty(value).expect("public response models must serialize")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kit::Reason;
+
+    #[test]
+    fn cli_error_json_matches_golden_contract() {
+        let error = Error::capability_unavailable(
+            "runtime_start is unavailable",
+            vec![Reason::not_implemented()],
+        );
+        let actual = format!("{}\n", render_json(&Envelope::new(error)));
+        assert_eq!(actual, include_str!("../tests/golden/error-response.json"));
+    }
 }

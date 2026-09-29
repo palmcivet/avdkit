@@ -4,16 +4,24 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Field<T> {
-    Present { value: T },
+    /// A reliable value is available.
+    Present {
+        /// Field value.
+        value: T,
+    },
+    /// The current implementation or tool did not provide a value.
     Unavailable,
+    /// The field does not apply to this object or state.
     Inapplicable,
 }
 
 impl<T> Field<T> {
+    /// Creates a present field.
     pub fn present(value: T) -> Self {
         Self::Present { value }
     }
 
+    /// Borrows the present value, if any.
     pub fn as_value(&self) -> Option<&T> {
         match self {
             Self::Present { value } => Some(value),

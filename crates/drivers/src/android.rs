@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{path::PathBuf, str::FromStr};
 
 use model::{Diagnostic, Error, ErrorCode, ProfileId, Revision};
 use process::Output;
@@ -8,6 +8,9 @@ use crate::NormalizedOutput;
 pub fn parse_version(output: &Output) -> Result<Revision, Error> {
     let normalized = NormalizedOutput::from(output);
     reject_known_error(output, &normalized)?;
+    if normalized.status != Some(0) {
+        return Err(unrecognized(output, "Android CLI version command failed"));
+    }
     let Some(version) = normalized.stdout.first() else {
         return Err(unrecognized(output, "Android CLI version is missing"));
     };
@@ -18,6 +21,22 @@ pub fn parse_version(output: &Output) -> Result<Revision, Error> {
         ));
     }
     Revision::from_str(version).map_err(|_| unrecognized(output, "Android CLI version is invalid"))
+}
+
+pub fn parse_sdk_root(output: &Output) -> Result<PathBuf, Error> {
+    let normalized = NormalizedOutput::from(output);
+    reject_known_error(output, &normalized)?;
+    if normalized.status != Some(0) || normalized.stdout.len() != 1 {
+        return Err(unrecognized(
+            output,
+            "Android CLI SDK root output is invalid",
+        ));
+    }
+    let path = PathBuf::from(&normalized.stdout[0]);
+    if !path.is_absolute() {
+        return Err(unrecognized(output, "Android CLI SDK root is not absolute"));
+    }
+    Ok(path)
 }
 
 pub fn parse_profiles(output: &Output) -> Result<Vec<ProfileId>, Error> {
@@ -49,7 +68,16 @@ pub fn check_known_errors(output: &Output) -> Result<(), Error> {
 
 fn reject_known_error(output: &Output, normalized: &NormalizedOutput) -> Result<(), Error> {
     for line in normalized.lines() {
-        let classification = if line.contains("doesn't exist") {
+        let lowercase = line.to_ascii_lowercase();
+        let classification = if lowercase.contains("terms of service")
+            || lowercase.contains("first-run")
+            || lowercase.contains("first run")
+        {
+            Some((
+                ErrorCode::PreconditionFailed,
+                "Android CLI first-run setup is incomplete",
+            ))
+        } else if line.contains("doesn't exist") {
             Some((
                 ErrorCode::PreconditionFailed,
                 "Android virtual device does not exist",
@@ -133,6 +161,32 @@ mod tests {
         assert_eq!(
             parse_version(&output).unwrap_err().code,
             ErrorCode::ToolOutputUnrecognized
+        );
+    }
+
+    #[test]
+    fn parses_an_absolute_sdk_root() {
+        let output = Output {
+            status: Some(0),
+            stdout: "/opt/android-sdk\n".into(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            parse_sdk_root(&output).unwrap(),
+            PathBuf::from("/opt/android-sdk")
+        );
+    }
+
+    #[test]
+    fn recognizes_incomplete_first_run_setup() {
+        let output = Output {
+            status: Some(0),
+            stdout: "Android CLI Terms of Service must be accepted\n".into(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            parse_version(&output).unwrap_err().code,
+            ErrorCode::PreconditionFailed
         );
     }
 }

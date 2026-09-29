@@ -1,10 +1,12 @@
 /// Temporary product name. Other identifiers are derived from this value.
 pub const PRODUCT_NAME: &str = "avdkit";
 
+/// Returns the environment-variable prefix derived from [`PRODUCT_NAME`].
 pub fn environment_prefix() -> String {
     format!("{}_", PRODUCT_NAME.to_ascii_uppercase())
 }
 
+/// Returns the AVD identifier prefix reserved for tests.
 pub fn test_avd_prefix() -> String {
     format!("{PRODUCT_NAME}_test_")
 }

@@ -6,8 +6,10 @@ use tokio::sync::{mpsc, oneshot};
 
 static NEXT_OPERATION: AtomicU64 = AtomicU64::new(1);
 
+/// Handle for consuming events, cancelling work, and obtaining one final result.
 #[derive(Debug)]
 pub struct Operation {
+    /// Process-local operation identifier.
     pub id: String,
     events: mpsc::UnboundedReceiver<Event>,
     result: oneshot::Receiver<Result<OperationResult, Error>>,
@@ -19,6 +21,7 @@ impl Operation {
         format!("op-{}", NEXT_OPERATION.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// Creates an already-completed failed operation.
     pub fn failed(error: Error) -> Self {
         let (event_tx, events) = mpsc::unbounded_channel();
         let (result_tx, result) = oneshot::channel();
@@ -36,18 +39,22 @@ impl Operation {
         }
     }
 
+    /// Creates an already-completed unsupported operation.
     pub fn not_implemented(what: impl AsRef<str>) -> Self {
         Self::failed(Error::not_implemented(what))
     }
 
+    /// Waits for the next event, returning `None` after the event stream closes.
     pub async fn next_event(&mut self) -> Option<Event> {
         self.events.recv().await
     }
 
+    /// Requests cancellation. Repeated calls are safe.
     pub fn cancel(&self) {
         self.cancellation.cancel();
     }
 
+    /// Waits for and consumes the operation's final result.
     pub async fn result(self) -> Result<OperationResult, Error> {
         match self.result.await {
             Ok(result) => result,

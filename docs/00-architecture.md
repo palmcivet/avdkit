@@ -62,7 +62,7 @@ flowchart LR
 
 ### 环境与能力：`env`
 
-`env` 探测一次主机，生成不可变的 `EnvironmentSnapshot`，再从快照推导 `CapabilityMatrix`。
+`env` 探测一次主机，生成不可变的 `EnvironmentSnapshot`。`core` 的领域路由再根据快照推导 `CapabilityMatrix`。
 
 快照避免一次操作中途因为环境变量或 PATH 变化而使用不同工具。调用 `Kit.refresh()` 才会重新探测并整体替换快照。
 
@@ -76,7 +76,7 @@ flowchart LR
 - 长任务返回可观察、可取消的 `Operation`；
 - 组合操作先编译为可序列化的 `Plan`。
 
-工具选择、预检、计划补偿和公共模型转换都属于这一层。Rust 调用方只需要依赖包 `avdkit`，不需要直接依赖内部 crate。
+固定工具选择由可单独测试的领域路由完成；预检、计划补偿和公共模型转换也属于这一层。Rust 调用方只需要依赖包 `avdkit`，不需要直接依赖内部 crate。
 
 ### 出口：`cli`、`ffi`
 
@@ -91,7 +91,7 @@ flowchart LR
 ```text
 cli / ffi → core
 core      → env, drivers, avdfs, process, model
-env       → platform, model
+env       → drivers, process, platform, model
 drivers   → process, model
 avdfs     → model
 process   → platform, model
@@ -128,3 +128,5 @@ model     → 无 workspace 依赖
 4. [工具驱动](04-tool-drivers.md)：官方工具的不一致如何被隔离。
 5. [只读查询](05-read-only-queries.md)：一个已经跑通的端到端示例。
 6. [设备文件查询](06-device-files.md)：不依赖工具输出读取 AVD 列表与详情。
+7. [公开基线与契约测试](07-public-baseline.md)：MSRV、文档、golden、CLI 和 blocking 边界。
+8. [环境探测与领域路由](08-environment-routing.md)：来源合并、SDK 选择、包扫描与固定实现选择。

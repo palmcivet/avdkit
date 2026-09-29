@@ -4,28 +4,40 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 
+/// Whether SDK license prompts may be accepted automatically.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LicenseAcceptance {
+    /// Never accept a license on behalf of the caller.
     #[default]
     Never,
+    /// Allow configured operations to accept licenses.
     Allow,
 }
 
+/// Controls Android CLI metrics behavior.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AndroidCliMetrics {
+    /// Preserve the tool's default metrics behavior.
     #[default]
     Inherit,
+    /// Pass the Android CLI option that disables metrics.
     NoMetrics,
 }
 
+/// Caller-controlled side-effect policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Policy {
+    /// Whether operations may install missing dependencies implicitly.
     pub implicit_install: bool,
+    /// Whether callers may request explicit package installation.
     pub explicit_install: bool,
+    /// License acceptance policy.
     pub license_acceptance: LicenseAcceptance,
+    /// Whether plans may edit AVD files directly.
     pub file_operations: bool,
+    /// Android CLI metrics policy.
     pub android_cli_metrics: AndroidCliMetrics,
 }
 
@@ -63,26 +75,37 @@ impl Policy {
     }
 }
 
+/// Ordered preferences for choosing among tool implementations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ToolPreference {
+    /// Stable implementation identifiers in preference order.
     pub entries: Vec<String>,
 }
 
+/// Time limits for tool and lifecycle operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Timeouts {
+    /// Maximum duration of a single tool command.
     pub command_seconds: Option<u64>,
 }
 
+/// Configuration used to construct the public facade.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct KitConfig {
+    /// Optional SDK root that overrides environment discovery.
     pub sdk_root: Option<PathBuf>,
+    /// Policy governing side effects.
     pub policy: Policy,
+    /// Tool implementation preferences.
     pub tool_preference: ToolPreference,
+    /// Operation timeout overrides.
     pub timeouts: Timeouts,
+    /// Optional directory for file transaction backups.
     pub backup_dir: Option<PathBuf>,
 }
 
 impl KitConfig {
+    /// Validates that every selected option is supported.
     pub fn validate(&self) -> Result<(), Error> {
         self.policy.validate()?;
         if self.tool_preference != ToolPreference::default() {

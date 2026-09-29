@@ -39,7 +39,7 @@ Android CLI 缺失时，该能力为 `unavailable`，原因包含 `tool_not_foun
 ```rust
 use avdkit::{Kit, KitConfig};
 
-let kit = Kit::new(KitConfig::default())?;
+let kit = Kit::new_async(KitConfig::default()).await?;
 let profiles = kit.profiles().await?;
 
 for profile in profiles {

@@ -1,0 +1,24 @@
+{
+  "capabilities": [
+    {
+      "id": "environment",
+      "state": {
+        "state": "available",
+        "implementation": "platform_probe"
+      }
+    },
+    {
+      "id": "runtime_start",
+      "state": {
+        "state": "unavailable",
+        "reasons": [
+          {
+            "code": "not_implemented",
+            "message": "this operation is not implemented yet",
+            "remedies": []
+          }
+        ]
+      }
+    }
+  ]
+}

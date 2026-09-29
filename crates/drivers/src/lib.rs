@@ -76,6 +76,15 @@ impl ToolEnvironment {
 }
 
 impl Invocation {
+    pub fn android_discovery(executable: PathBuf, args: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            tool: Tool::Android,
+            executable,
+            args: args.into_iter().collect(),
+            environment: BTreeMap::new(),
+        }
+    }
+
     pub fn android(
         executable: PathBuf,
         sdk_root: &std::path::Path,
@@ -115,6 +124,11 @@ impl Invocation {
 
     pub fn with_environment(mut self, environment: &ToolEnvironment) -> Self {
         self.environment = environment.variables();
+        self
+    }
+
+    pub fn with_variables(mut self, variables: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.environment.extend(variables);
         self
     }
 

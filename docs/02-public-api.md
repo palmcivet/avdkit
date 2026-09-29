@@ -11,7 +11,7 @@ Rust 调用方只需要依赖包 `avdkit`。`Kit` 持有配置和当前环境快
 ```rust
 use avdkit::{Kit, KitConfig};
 
-let kit = Kit::new(KitConfig::default())?;
+let kit = Kit::new_async(KitConfig::default()).await?;
 
 let environment = kit.environment().await?;
 let capabilities = kit.capabilities().await?;
@@ -21,19 +21,26 @@ let profiles = kit.profiles().await?;
 创建 `Kit` 时会：
 
 1. 校验整份 `KitConfig`；
-2. 探测主机、路径和工具；
-3. 生成不可变环境快照；
-4. 从快照生成能力矩阵。
+2. 合并进程与平台登录环境；
+3. 探测主机、路径、工具版本和已安装 SDK 包；
+4. 生成不可变环境快照；
+5. 由固定领域路由从快照生成能力矩阵。
 
 `Kit` 实现 `Send + Sync`，可以放入 `Arc` 后由多个异步任务共享。查询返回的数据是快照副本，后续刷新不会修改调用方已经持有的值。
+
+异步应用使用 `new_async()`，环境探测会进入 Tokio blocking pool。没有异步运行时的调用方也可以使用同步的 `Kit::new()`；该方法会在当前线程完成文件系统探测。
 
 ## 环境快照
 
 `environment()` 返回 `EnvironmentReport`，其中包含：
 
 - `snapshot.host`：平台、CPU 架构以及当前是否受支持；
-- `snapshot.paths`：SDK、Android 用户目录、AVD 目录和库数据目录；
-- `snapshot.tools`：每个官方工具的名称与发现路径；
+- `snapshot.host.android_abi`：运行时探测的 Android ABI；
+- `snapshot.paths` 与 `sdk_root_source`：SDK、Android 用户目录、AVD 目录、库数据目录以及 SDK 选择来源；
+- `snapshot.environment`：参与路径选择的环境值及其来源；
+- `snapshot.tools`：每个官方工具的路径、版本、状态和包来源；
+- `snapshot.installed_packages`：从 `source.properties` 扫描的工具包和系统镜像；
+- `snapshot.diagnostics`：不阻止探测完成的来源冲突和探针失败；
 - `capabilities`：基于这份快照推导的能力矩阵。
 
 环境变量、PATH 或 SDK 内容变化后，调用：

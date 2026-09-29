@@ -1,24 +1,29 @@
 //! Public Rust facade.
 
 #![allow(clippy::result_large_err)]
+#![deny(missing_docs)]
 
 mod operation;
 mod planner;
+mod routing;
 
 use std::sync::{Arc, RwLock};
 
 pub use model::{
     environment_prefix, test_avd_prefix, AndroidCliMetrics, AvdId, BootStatus, Capability,
     CapabilityId, CapabilityMatrix, CapabilityState, Compensation, CpuArchitecture,
-    CreateDeviceDraft, Description, Device, Diagnostic, Envelope, EnvironmentReport,
-    EnvironmentSnapshot, Error, ErrorCode, Event, Field, HardwareConfig, Host, KitConfig,
-    LicenseAcceptance, LogStream, ModelError, OperationResult, Package, PackageId, PackageKind,
-    Plan, PlanKind, PlanStep, PlanStepKind, Platform, PlatformPaths, Policy, Profile, ProfileId,
-    Reason, ReasonCode, Remedy, RemedyKind, Revision, RunningInstance, Serial, StartOptions,
-    Timeouts, ToolNames, ToolPreference, ToolStatus, PRODUCT_NAME, SCHEMA_VERSION,
+    CreateDeviceDraft, Description, Device, Diagnostic, Envelope, EnvironmentDiagnostic,
+    EnvironmentDiagnosticCode, EnvironmentReport, EnvironmentSnapshot, EnvironmentValue, Error,
+    ErrorCode, Event, Field, HardwareConfig, Host, KitConfig, LicenseAcceptance, LogStream,
+    ModelError, OperationResult, Package, PackageId, PackageKind, Plan, PlanKind, PlanStep,
+    PlanStepKind, Platform, PlatformPaths, Policy, Profile, ProfileId, Reason, ReasonCode, Remedy,
+    RemedyKind, Revision, RunningInstance, Serial, StartOptions, Timeouts, ToolNames,
+    ToolPreference, ToolSource, ToolState, ToolStatus, ValueSource, PRODUCT_NAME, SCHEMA_VERSION,
 };
 pub use operation::Operation;
+use routing::{Implementation, Router};
 
+/// Thread-safe entry point for environment queries and AVD operations.
 #[derive(Debug, Clone)]
 pub struct Kit {
     config: KitConfig,
@@ -26,43 +31,72 @@ pub struct Kit {
 }
 
 impl Kit {
+    /// Constructs a facade and probes the environment on the current thread.
+    ///
+    /// Async callers should prefer [`Kit::new_async`] so filesystem discovery
+    /// runs on the runtime's blocking pool.
     pub fn new(config: KitConfig) -> Result<Self, Error> {
         config.validate()?;
-        let report = ::environment::probe_with_sdk_root(config.sdk_root.as_deref());
+        let snapshot = probe_environment_sync(config.sdk_root.clone())?;
+        let report = report_from_snapshot(snapshot);
         Ok(Self {
             config,
             report: Arc::new(RwLock::new(report)),
         })
     }
 
+    /// Constructs a facade without blocking an async worker on discovery I/O.
+    pub async fn new_async(config: KitConfig) -> Result<Self, Error> {
+        config.validate()?;
+        let snapshot = ::environment::discovery::probe(config.sdk_root.clone()).await?;
+        let report = report_from_snapshot(snapshot);
+        Ok(Self {
+            config,
+            report: Arc::new(RwLock::new(report)),
+        })
+    }
+
+    /// Returns the validated configuration.
     pub fn config(&self) -> &KitConfig {
         &self.config
     }
 
+    /// Returns the cached environment report.
     pub async fn environment(&self) -> Result<EnvironmentReport, Error> {
         self.read_report()
     }
 
+    /// Returns the cached capability entries.
     pub async fn capabilities(&self) -> Result<Vec<Capability>, Error> {
         Ok(self.read_report()?.capabilities.capabilities)
     }
 
+    /// Re-runs environment discovery on the async runtime's blocking pool.
     pub async fn refresh(&self) -> Result<EnvironmentReport, Error> {
-        let report = ::environment::probe_with_sdk_root(self.config.sdk_root.as_deref());
+        let snapshot = ::environment::discovery::probe(self.config.sdk_root.clone()).await?;
+        let report = report_from_snapshot(snapshot);
         *self.write_report()? = report;
         self.read_report()
     }
 
+    /// Lists installed SDK packages.
     pub async fn list_installed(&self) -> Result<Vec<Package>, Error> {
         self.require_capability(CapabilityId::PackagesListInstalled)?;
-        Ok(Vec::new())
+        let report = self.read_report()?;
+        debug_assert_eq!(
+            Router.selected(CapabilityId::PackagesListInstalled, &report.snapshot)?,
+            Implementation::InstalledSdkFiles
+        );
+        Ok(report.snapshot.installed_packages)
     }
 
+    /// Lists SDK packages available for installation.
     pub async fn list_available(&self) -> Result<Vec<Package>, Error> {
         self.require_capability(CapabilityId::PackagesListAvailable)?;
         Ok(Vec::new())
     }
 
+    /// Starts an SDK package installation operation.
     pub fn install(&self, _package: PackageId) -> Operation {
         match self.require_capability(CapabilityId::PackagesInstall) {
             Ok(()) => Operation::not_implemented("packages.install"),
@@ -70,6 +104,7 @@ impl Kit {
         }
     }
 
+    /// Starts an SDK package removal operation.
     pub fn remove(&self, _package: PackageId) -> Operation {
         match self.require_capability(CapabilityId::PackagesRemove) {
             Ok(()) => Operation::not_implemented("packages.remove"),
@@ -77,36 +112,61 @@ impl Kit {
         }
     }
 
+    /// Scans AVD metadata files on the async runtime's blocking pool.
     pub async fn list_devices(&self) -> Result<Vec<Device>, Error> {
         self.require_capability(CapabilityId::DevicesList)?;
         let report = self.read_report()?;
-        avdfs::AvdStore::new(
-            report.snapshot.paths.avd_root,
-            report.snapshot.paths.user_root,
-        )
-        .list()
-        .map(|devices| devices.into_iter().map(device_from_metadata).collect())
+        debug_assert_eq!(
+            Router.selected(CapabilityId::DevicesList, &report.snapshot)?,
+            Implementation::AvdFiles
+        );
+        tokio::task::spawn_blocking(move || {
+            avdfs::AvdStore::new(
+                report.snapshot.paths.avd_root,
+                report.snapshot.paths.user_root,
+            )
+            .list()
+            .map(|devices| devices.into_iter().map(device_from_metadata).collect())
+        })
+        .await
+        .map_err(blocking_task_error)?
     }
 
+    /// Reads one AVD's metadata files on the async runtime's blocking pool.
     pub async fn get_device(&self, id: &AvdId) -> Result<Device, Error> {
         self.require_capability(CapabilityId::DevicesGet)?;
         let report = self.read_report()?;
-        avdfs::AvdStore::new(
-            report.snapshot.paths.avd_root,
-            report.snapshot.paths.user_root,
-        )
-        .get(id)
-        .map(device_from_metadata)
+        debug_assert_eq!(
+            Router.selected(CapabilityId::DevicesGet, &report.snapshot)?,
+            Implementation::AvdFiles
+        );
+        let id = id.clone();
+        tokio::task::spawn_blocking(move || {
+            avdfs::AvdStore::new(
+                report.snapshot.paths.avd_root,
+                report.snapshot.paths.user_root,
+            )
+            .get(&id)
+            .map(device_from_metadata)
+        })
+        .await
+        .map_err(blocking_task_error)?
     }
 
+    /// Queries the legacy Android CLI for its preset device profiles.
     pub async fn profiles(&self) -> Result<Vec<Profile>, Error> {
         self.require_capability(CapabilityId::DevicesProfiles)?;
         let report = self.read_report()?;
+        debug_assert_eq!(
+            Router.selected(CapabilityId::DevicesProfiles, &report.snapshot)?,
+            Implementation::AndroidCli
+        );
         let executable = report
             .snapshot
             .tools
             .iter()
             .find(|tool| tool.name == report.snapshot.tool_names.android)
+            .filter(|tool| tool.state == ToolState::Available)
             .and_then(|tool| tool.path.clone())
             .ok_or_else(|| Error::new(ErrorCode::ToolNotFound, "Android CLI was not found"))?;
         let environment = drivers::ToolEnvironment::from(&report.snapshot.paths);
@@ -123,18 +183,25 @@ impl Kit {
         )?))
     }
 
+    /// Compiles a serializable plan for creating an AVD.
     pub fn plan_create(&self, draft: CreateDeviceDraft) -> Result<Plan, Error> {
         if !draft.hardware.is_default() {
             return Err(Error::not_implemented("custom hardware"));
         }
         self.require_capability(CapabilityId::DevicesPlanCreate)?;
+        debug_assert_eq!(
+            Router.plan_tool(PlanKind::CreateDevice),
+            Implementation::AndroidCli
+        );
         Ok(planner::compile_create(&draft))
     }
 
+    /// Starts execution of a previously compiled plan.
     pub fn execute_plan(&self, plan: Plan) -> Operation {
         Operation::not_implemented(format!("execute plan {}", plan.id))
     }
 
+    /// Starts an operation that deletes an AVD.
     pub fn delete_device(&self, _id: AvdId) -> Operation {
         match self.require_capability(CapabilityId::DevicesDelete) {
             Ok(()) => Operation::not_implemented("devices.delete"),
@@ -142,16 +209,19 @@ impl Kit {
         }
     }
 
+    /// Lists discovered running emulator instances.
     pub async fn running(&self) -> Result<Vec<RunningInstance>, Error> {
         self.require_capability(CapabilityId::RuntimeRunning)?;
         Ok(Vec::new())
     }
 
+    /// Returns the current boot state of an AVD.
     pub async fn boot_status(&self, _id: &AvdId) -> Result<BootStatus, Error> {
         self.require_capability(CapabilityId::RuntimeBootStatus)?;
         Ok(BootStatus::Offline)
     }
 
+    /// Starts an emulator operation.
     pub fn start(&self, _id: AvdId, options: StartOptions) -> Operation {
         if !options.is_default() {
             return Operation::not_implemented("custom start options");
@@ -162,6 +232,7 @@ impl Kit {
         }
     }
 
+    /// Starts an operation that stops an emulator.
     pub fn stop(&self, _id: AvdId) -> Operation {
         match self.require_capability(CapabilityId::RuntimeStop) {
             Ok(()) => Operation::not_implemented("runtime.stop"),
@@ -196,6 +267,44 @@ impl Kit {
             )),
             None => Err(Error::not_implemented(id.as_str())),
         }
+    }
+}
+
+fn report_from_snapshot(snapshot: EnvironmentSnapshot) -> EnvironmentReport {
+    EnvironmentReport {
+        capabilities: Router.matrix(&snapshot),
+        snapshot,
+    }
+}
+
+fn blocking_task_error(error: tokio::task::JoinError) -> Error {
+    Error::new(
+        ErrorCode::Internal,
+        format!("blocking task failed: {error}"),
+    )
+}
+
+fn probe_environment_sync(
+    sdk_root: Option<std::path::PathBuf>,
+) -> Result<EnvironmentSnapshot, Error> {
+    let probe = move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| {
+                Error::new(
+                    ErrorCode::Internal,
+                    format!("create environment probe runtime: {error}"),
+                )
+            })?
+            .block_on(::environment::discovery::probe(sdk_root))
+    };
+    if tokio::runtime::Handle::try_current().is_ok() {
+        std::thread::spawn(probe)
+            .join()
+            .map_err(|_| Error::new(ErrorCode::Internal, "environment probe thread panicked"))?
+    } else {
+        probe()
     }
 }
 

@@ -1,0 +1,12 @@
+{
+  "code": "tool_output_unrecognized",
+  "message": "version output is invalid",
+  "reasons": [],
+  "failed_step": "read_version",
+  "diagnostic": {
+    "command": "android --version",
+    "stdout": "unknown\n",
+    "stderr": "",
+    "exit_status": 0
+  }
+}

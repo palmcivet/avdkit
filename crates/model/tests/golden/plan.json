@@ -1,0 +1,14 @@
+{
+  "id": "create:phone_one",
+  "kind": "create_device",
+  "steps": [
+    {
+      "id": "create_profile",
+      "kind": "tool_call",
+      "description": "create temporary profile",
+      "compensation": {
+        "description": "delete temporary profile"
+      }
+    }
+  ]
+}

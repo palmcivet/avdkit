@@ -4,11 +4,13 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::ModelError;
 
+/// Validated identifier of an Android virtual device.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct AvdId(String);
 
 impl AvdId {
+    /// Validates and constructs an AVD identifier.
     pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
         let value = value.into();
         if value.is_empty() {
@@ -20,6 +22,7 @@ impl AvdId {
         Ok(Self(value))
     }
 
+    /// Returns the identifier text.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -31,11 +34,13 @@ impl fmt::Display for AvdId {
     }
 }
 
+/// Validated adb device serial.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct Serial(String);
 
 impl Serial {
+    /// Validates and constructs a serial.
     pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
         let value = value.into();
         if value.is_empty() {
@@ -44,6 +49,7 @@ impl Serial {
         Ok(Self(value))
     }
 
+    /// Returns the serial text.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -55,11 +61,13 @@ impl fmt::Display for Serial {
     }
 }
 
+/// Validated identifier of a device hardware profile.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ProfileId(String);
 
 impl ProfileId {
+    /// Validates and constructs a profile identifier.
     pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
         let value = value.into();
         if value.is_empty() {
@@ -68,6 +76,7 @@ impl ProfileId {
         Ok(Self(value))
     }
 
+    /// Returns the profile identifier text.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -97,16 +106,23 @@ deserialize_validated_identifier!(AvdId);
 deserialize_validated_identifier!(Serial);
 deserialize_validated_identifier!(ProfileId);
 
+/// Structured identifier of an Android SDK package.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageId {
+    /// Package category and root directory.
     pub kind: PackageKind,
+    /// API or platform component.
     pub api: Option<String>,
+    /// Image tag or package channel.
     pub tag: Option<String>,
+    /// Guest ABI for a system image.
     pub abi: Option<String>,
+    /// Remaining package-specific path suffix.
     pub qualifier: Option<String>,
 }
 
 impl PackageId {
+    /// Renders the identifier as normalized path components.
     pub fn segments(&self) -> Vec<String> {
         let mut segments = vec![self.kind.directory().to_owned()];
         if let Some(api) = &self.api {
@@ -128,28 +144,39 @@ impl PackageId {
         segments
     }
 
+    /// Renders the identifier in repository semicolon notation.
     pub fn render_semicolon(&self) -> String {
         self.segments().join(";")
     }
 
+    /// Renders the identifier as an SDK-relative slash path.
     pub fn render_slash(&self) -> String {
         self.segments().join("/")
     }
 }
 
+/// Category of an Android SDK package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageKind {
+    /// Emulator guest system image.
     SystemImage,
+    /// Android API platform.
     Platform,
+    /// Android build tools.
     BuildTools,
+    /// Emulator package.
     Emulator,
+    /// adb and related platform tools.
     PlatformTools,
+    /// Modern SDK command-line tools.
     CommandLineTools,
+    /// Package without a dedicated category.
     Other,
 }
 
 impl PackageKind {
+    /// Returns the package's SDK root directory name.
     pub fn directory(self) -> &'static str {
         match self {
             Self::SystemImage => "system-images",
@@ -163,9 +190,12 @@ impl PackageKind {
     }
 }
 
+/// Comparable dotted revision with an optional suffix.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Revision {
+    /// Numeric dotted components with insignificant trailing zeroes removed.
     pub components: Vec<u64>,
+    /// Optional text following the first hyphen.
     pub suffix: Option<String>,
 }
 
