@@ -1,0 +1,4 @@
+[bindings.swift]
+module_name = "AvdkitBindings"
+ffi_module_name = "AvdkitFFI"
+generate_module_map = true

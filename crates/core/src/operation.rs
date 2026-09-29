@@ -3,7 +3,7 @@ use std::{future::Future, pin::Pin};
 
 use model::{Error, ErrorCode, Event, OperationResult};
 use process::CancellationToken;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 
 static NEXT_OPERATION: AtomicU64 = AtomicU64::new(1);
 
@@ -12,8 +12,8 @@ static NEXT_OPERATION: AtomicU64 = AtomicU64::new(1);
 pub struct Operation {
     /// Process-local operation identifier.
     pub id: String,
-    events: mpsc::UnboundedReceiver<Event>,
-    result: oneshot::Receiver<Result<OperationResult, Error>>,
+    events: Mutex<mpsc::UnboundedReceiver<Event>>,
+    result: Mutex<Option<oneshot::Receiver<Result<OperationResult, Error>>>>,
     cancellation: CancellationToken,
 }
 
@@ -34,8 +34,8 @@ impl Operation {
         let _ = result_tx.send(Err(error));
         Self {
             id: Self::next_id(),
-            events,
-            result,
+            events: Mutex::new(events),
+            result: Mutex::new(Some(result)),
             cancellation,
         }
     }
@@ -62,8 +62,8 @@ impl Operation {
         let cancellation = CancellationToken::new();
         let operation = Self {
             id: id.clone(),
-            events,
-            result,
+            events: Mutex::new(events),
+            result: Mutex::new(Some(result)),
             cancellation: cancellation.clone(),
         };
         let task = run(id, event_tx, cancellation);
@@ -81,8 +81,8 @@ impl Operation {
     }
 
     /// Waits for the next event, returning `None` after the event stream closes.
-    pub async fn next_event(&mut self) -> Option<Event> {
-        self.events.recv().await
+    pub async fn next_event(&self) -> Option<Event> {
+        self.events.lock().await.recv().await
     }
 
     /// Requests cancellation. Repeated calls are safe.
@@ -91,8 +91,11 @@ impl Operation {
     }
 
     /// Waits for and consumes the operation's final result.
-    pub async fn result(self) -> Result<OperationResult, Error> {
-        match self.result.await {
+    pub async fn result(&self) -> Result<OperationResult, Error> {
+        let result = self.result.lock().await.take().ok_or_else(|| {
+            Error::new(ErrorCode::Internal, "operation result was already consumed")
+        })?;
+        match result.await {
             Ok(result) => result,
             Err(_) => Err(Error::new(
                 ErrorCode::Internal,
@@ -114,8 +117,8 @@ impl Operation {
         });
         Self {
             id: Self::next_id(),
-            events,
-            result,
+            events: Mutex::new(events),
+            result: Mutex::new(Some(result)),
             cancellation,
         }
     }

@@ -485,7 +485,7 @@ mod tests {
 
     #[tokio::test]
     async fn unavailable_operation_completes() {
-        let mut operation = kit().install(draft().image);
+        let operation = kit().install(draft().image);
         let event = operation.next_event().await;
         assert!(matches!(event, Some(Event::Warning { .. })));
         assert!(operation.next_event().await.is_none());
