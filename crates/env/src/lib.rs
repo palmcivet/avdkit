@@ -136,6 +136,11 @@ fn state_for(id: CapabilityId, snapshot: &EnvironmentSnapshot) -> CapabilityStat
                 implementation: "android_cli".into(),
             }
         }
+        CapabilityId::DevicesList | CapabilityId::DevicesGet if snapshot.host.supported => {
+            CapabilityState::Available {
+                implementation: "avd_files".into(),
+            }
+        }
         CapabilityId::DevicesPlanCreate => CapabilityState::Available {
             implementation: "plan_compiler".into(),
         },
@@ -166,10 +171,17 @@ fn unavailable_reasons(id: CapabilityId, snapshot: &EnvironmentSnapshot) -> Vec<
         });
         reasons.push(reason);
     }
-    if id != CapabilityId::DevicesProfiles {
+    if !is_implemented(id) {
         reasons.push(Reason::not_implemented());
     }
     reasons
+}
+
+fn is_implemented(id: CapabilityId) -> bool {
+    matches!(
+        id,
+        CapabilityId::DevicesList | CapabilityId::DevicesGet | CapabilityId::DevicesProfiles
+    )
 }
 
 fn tools_found_for(id: CapabilityId, snapshot: &EnvironmentSnapshot) -> bool {
@@ -183,7 +195,11 @@ fn tools_found_for(id: CapabilityId, snapshot: &EnvironmentSnapshot) -> bool {
 fn needs_official_tools(id: CapabilityId) -> bool {
     !matches!(
         id,
-        CapabilityId::Environment | CapabilityId::Capabilities | CapabilityId::Refresh
+        CapabilityId::Environment
+            | CapabilityId::Capabilities
+            | CapabilityId::Refresh
+            | CapabilityId::DevicesList
+            | CapabilityId::DevicesGet
     )
 }
 
@@ -257,6 +273,8 @@ mod tests {
             CapabilityId::Environment,
             CapabilityId::Capabilities,
             CapabilityId::Refresh,
+            CapabilityId::DevicesList,
+            CapabilityId::DevicesGet,
             CapabilityId::DevicesPlanCreate,
         ] {
             assert!(matches!(
@@ -298,6 +316,20 @@ mod tests {
                     .any(|reason| reason.code == ReasonCode::NotImplemented));
             }
             CapabilityState::Available { .. } => panic!("profiles should be unavailable"),
+        }
+    }
+
+    #[test]
+    fn file_queries_only_require_a_supported_platform() {
+        let capabilities = capabilities(&snapshot(true, false));
+        for id in [CapabilityId::DevicesList, CapabilityId::DevicesGet] {
+            assert!(matches!(
+                capabilities
+                    .iter()
+                    .find(|capability| capability.id == id)
+                    .map(|capability| &capability.state),
+                Some(CapabilityState::Available { implementation }) if implementation == "avd_files"
+            ));
         }
     }
 

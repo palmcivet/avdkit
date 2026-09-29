@@ -71,7 +71,6 @@ name = "avdkit-avdfs"
 version = "0.1.0"
 dependencies = [
  "avdkit-model",
- "avdkit-platform",
 ]
 
 [[package]]

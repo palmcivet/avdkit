@@ -92,7 +92,7 @@ for profile in profiles {
 }
 ```
 
-环境、能力、SDK 包、设备、机型、运行实例和开机状态都采用这种形态。当前已真实执行的是环境、能力、刷新和预设机型查询。
+环境、能力、SDK 包、设备、机型、运行实例和开机状态都采用这种形态。当前已真实执行的是环境、能力、刷新、设备列表与详情，以及预设机型查询。
 
 ### 长任务：返回 `Operation`
 
@@ -170,6 +170,7 @@ let plan = kit.plan_create(draft)?;
 
 - `capability_unavailable`：平台、工具或实现不可用；
 - `invalid_input`：公开模型或参数无效；
+- `device_not_found`、`package_not_found`：请求的对象不存在；
 - `precondition_failed`、`name_conflict`：本次请求不满足条件；
 - `tool_output_unrecognized`：工具运行了，但输出不符合已知契约；
 - `timeout`、`cancelled`：执行没有正常完成；

@@ -79,12 +79,18 @@ impl Kit {
 
     pub async fn list_devices(&self) -> Result<Vec<Device>, Error> {
         self.require_capability(CapabilityId::DevicesList)?;
-        Ok(Vec::new())
+        let report = self.read_report()?;
+        avdfs::AvdStore::new(report.snapshot.paths.avd_root)
+            .list()
+            .map(|devices| devices.into_iter().map(device_from_metadata).collect())
     }
 
-    pub async fn get_device(&self, _id: &AvdId) -> Result<Device, Error> {
-        self.require_capability(CapabilityId::DevicesGet)
-            .and(Err(Error::not_implemented("devices.get")))
+    pub async fn get_device(&self, id: &AvdId) -> Result<Device, Error> {
+        self.require_capability(CapabilityId::DevicesGet)?;
+        let report = self.read_report()?;
+        avdfs::AvdStore::new(report.snapshot.paths.avd_root)
+            .get(id)
+            .map(device_from_metadata)
     }
 
     pub async fn profiles(&self) -> Result<Vec<Profile>, Error> {
@@ -196,6 +202,18 @@ fn profiles_from_ids(ids: Vec<ProfileId>) -> Vec<Profile> {
         .collect()
 }
 
+fn device_from_metadata(metadata: avdfs::AvdMetadata) -> Device {
+    Device {
+        id: metadata.id,
+        display_name: metadata
+            .display_name
+            .map_or(Field::Unavailable, Field::present),
+        profile: metadata.profile.map_or(Field::Unavailable, Field::present),
+        image: metadata.image.map_or(Field::Unavailable, Field::present),
+        target: metadata.target.map_or(Field::Unavailable, Field::present),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +279,28 @@ mod tests {
         let profiles = profiles_from_ids(vec![ProfileId::new("medium_phone").unwrap()]);
         assert_eq!(profiles[0].id.as_str(), "medium_phone");
         assert!(profiles[0].display_name.as_value().is_none());
+    }
+
+    #[test]
+    fn avd_metadata_maps_missing_values_to_unavailable_fields() {
+        let device = device_from_metadata(avdfs::AvdMetadata {
+            id: AvdId::new("phone").unwrap(),
+            directory: "/unused".into(),
+            display_name: Some("Phone".into()),
+            profile: None,
+            image: None,
+            target: Some("android-36".into()),
+        });
+        assert_eq!(
+            device.display_name.as_value().map(String::as_str),
+            Some("Phone")
+        );
+        assert!(device.profile.as_value().is_none());
+        assert!(device.image.as_value().is_none());
+        assert_eq!(
+            device.target.as_value().map(String::as_str),
+            Some("android-36")
+        );
     }
 
     #[tokio::test]

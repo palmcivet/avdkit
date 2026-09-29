@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use kit::{Envelope, Kit, KitConfig};
+use kit::{AvdId, Envelope, Field, Kit, KitConfig};
 
 #[derive(Debug, Parser)]
 #[command(name = "avdkit", version, about = "Android virtual device management")]
@@ -23,6 +23,8 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum DevicesCommand {
+    List,
+    Get { id: String },
     Profiles,
 }
 
@@ -73,21 +75,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("environment refreshed");
             }
         }
-        Command::Devices {
-            command: DevicesCommand::Profiles,
-        } => {
-            let profiles = kit.profiles().await?;
-            if cli.json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&Envelope::new(&profiles))?
-                );
-            } else {
-                for profile in profiles {
-                    println!("{}", profile.id);
+        Command::Devices { command } => match command {
+            DevicesCommand::List => {
+                let devices = kit.list_devices().await?;
+                if cli.json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&Envelope::new(&devices))?
+                    );
+                } else {
+                    for device in devices {
+                        match device.display_name {
+                            Field::Present { value } => println!("{}\t{}", device.id, value),
+                            Field::Unavailable | Field::Inapplicable => println!("{}", device.id),
+                        }
+                    }
                 }
             }
-        }
+            DevicesCommand::Get { id } => {
+                let device = kit.get_device(&AvdId::new(id)?).await?;
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&Envelope::new(&device))?);
+                } else {
+                    println!("id: {}", device.id);
+                    if let Field::Present { value } = device.display_name {
+                        println!("name: {value}");
+                    }
+                    if let Field::Present { value } = device.profile {
+                        println!("profile: {value}");
+                    }
+                    if let Field::Present { value } = device.image {
+                        println!("image: {}", value.render_slash());
+                    }
+                    if let Field::Present { value } = device.target {
+                        println!("target: {value}");
+                    }
+                }
+            }
+            DevicesCommand::Profiles => {
+                let profiles = kit.profiles().await?;
+                if cli.json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&Envelope::new(&profiles))?
+                    );
+                } else {
+                    for profile in profiles {
+                        println!("{}", profile.id);
+                    }
+                }
+            }
+        },
     }
     Ok(())
 }

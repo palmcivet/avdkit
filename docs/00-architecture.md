@@ -115,6 +115,7 @@ model
 - 能力查询；
 - 环境刷新；
 - Android CLI 预设机型查询；
+- AVD 文件设备列表与详情；
 - 创建计划编译，不执行计划。
 
 其他公开入口会返回结构化的 `capability_unavailable`，而不是空结果或挂起的任务。
@@ -126,3 +127,4 @@ model
 3. [进程执行](03-process-execution.md)：取消和外部进程生命周期。
 4. [工具驱动](04-tool-drivers.md)：官方工具的不一致如何被隔离。
 5. [只读查询](05-read-only-queries.md)：一个已经跑通的端到端示例。
+6. [设备文件查询](06-device-files.md)：不依赖工具输出读取 AVD 列表与详情。

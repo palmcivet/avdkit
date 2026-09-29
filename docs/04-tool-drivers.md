@@ -130,7 +130,7 @@ Android CLI 1.0.x 已实测在以下失败中仍返回 0：
 
 已实现 `emulator -list-avds` 的名称解析。解析器允许空列表，并过滤可能混入 stdout 的 `INFO`、`WARNING` 和 `ERROR` 日志行。
 
-它只返回 AVD ID，不从输出猜测详情。设备详情应读取 `<id>.ini` 和 `config.ini`。
+它只返回 AVD ID，不从输出猜测详情。设备列表与详情由 `avdfs` 读取 `<id>.ini` 和 `config.ini`，见[设备文件查询](06-device-files.md)。
 
 ### adb
 

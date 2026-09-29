@@ -12,6 +12,7 @@ pub enum ErrorCode {
     CapabilityUnavailable,
     PreconditionFailed,
     DeviceRunning,
+    DeviceNotFound,
     NameConflict,
     PackageNotFound,
     LaunchFailed,
@@ -30,6 +31,7 @@ impl ErrorCode {
             Self::CapabilityUnavailable => "capability_unavailable",
             Self::PreconditionFailed => "precondition_failed",
             Self::DeviceRunning => "device_running",
+            Self::DeviceNotFound => "device_not_found",
             Self::NameConflict => "name_conflict",
             Self::PackageNotFound => "package_not_found",
             Self::LaunchFailed => "launch_failed",
@@ -127,5 +129,7 @@ mod tests {
     fn error_codes_serialize_as_snake_case() {
         let value = serde_json::to_value(ErrorCode::CapabilityUnavailable).unwrap();
         assert_eq!(value, "capability_unavailable");
+        let value = serde_json::to_value(ErrorCode::DeviceNotFound).unwrap();
+        assert_eq!(value, "device_not_found");
     }
 }
