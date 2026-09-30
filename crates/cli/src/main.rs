@@ -8,8 +8,8 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use kit::{
-    AvdId, CreateDeviceDraft, Envelope, Error, ErrorCode, Event, Field, HardwareConfig, Kit,
-    KitConfig, Operation, PackageId, PackageKind, Plan, ProfileId,
+    test_avd_prefix, AvdId, CreateDeviceDraft, Envelope, Error, ErrorCode, Event, Field,
+    HardwareConfig, Kit, KitConfig, Operation, PackageId, PackageKind, Plan, ProfileId,
 };
 
 #[derive(Debug, Parser)]
@@ -43,8 +43,19 @@ enum Command {
 #[derive(Debug, Subcommand)]
 enum DevicesCommand {
     List,
-    Get { id: String },
+    Get {
+        id: String,
+    },
     Profiles,
+    Delete {
+        id: String,
+        #[arg(long)]
+        approve: bool,
+    },
+    CleanupTests {
+        #[arg(long)]
+        approve: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -198,6 +209,38 @@ async fn run(cli: Cli) -> Result<(), CliFailure> {
                     for profile in profiles {
                         println!("{}", profile.id);
                     }
+                }
+            }
+            DevicesCommand::Delete { id, approve } => {
+                if !approve {
+                    return Err(Error::new(
+                        ErrorCode::InvalidInput,
+                        "device deletion requires --approve",
+                    )
+                    .into());
+                }
+                let id = AvdId::new(id).map_err(Error::from)?;
+                run_operation(kit.delete_device(id), cli.json).await?;
+            }
+            DevicesCommand::CleanupTests { approve } => {
+                if !approve {
+                    return Err(Error::new(
+                        ErrorCode::InvalidInput,
+                        "test AVD cleanup requires --approve",
+                    )
+                    .into());
+                }
+                let prefix = test_avd_prefix();
+                let ids = kit
+                    .list_devices()
+                    .await?
+                    .into_iter()
+                    .map(|device| device.id)
+                    .filter(|id| id.as_str().starts_with(&prefix))
+                    .collect::<Vec<_>>();
+                for id in ids {
+                    run_operation(kit.stop(id.clone()), cli.json).await?;
+                    run_operation(kit.delete_device(id), cli.json).await?;
                 }
             }
         },

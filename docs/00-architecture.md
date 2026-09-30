@@ -80,9 +80,9 @@ flowchart LR
 
 ### 出口：`cli`、`ffi`
 
-`cli` 将 `Kit` 映射为人类可读输出和带 `schema_version` 的 JSON。当前提供环境、能力、刷新、AVD 文件设备列表与详情，以及预设机型查询。
+`cli` 将 `Kit` 映射为人类可读输出、查询 JSON 和长任务 NDJSON，并提供计划审批执行与运行时命令。
 
-`ffi` 是语言绑定边界。正式 UniFFI 导出尚未接入；跨语言 async、取消和 XCFramework 已通过独立实验验证。
+`ffi` 用 UniFFI 导出 `Kit`、公共记录与枚举、异步方法和 `Operation`。Swift 易用层适配 `AsyncThrowingStream` 与 Task 取消；构建脚本生成 macOS arm64 XCFramework。
 
 ## 依赖规则
 
@@ -117,7 +117,10 @@ model     → 无 workspace 依赖
 - Android CLI 预设机型查询；
 - AVD 文件设备列表与详情；
 - 创建计划编译与执行；
-- 运行实例、开机状态、启动与停止。
+- AVD 删除与测试设备清扫；
+- 运行实例、开机状态、启动与停止；
+- CLI 计划与生命周期出口；
+- Swift UniFFI 绑定和单切片 XCFramework。
 
 其他公开入口会返回结构化的 `capability_unavailable`，而不是空结果或挂起的任务。
 
@@ -133,3 +136,5 @@ model     → 无 workspace 依赖
 8. [环境探测与领域路由](08-environment-routing.md)：来源合并、SDK 选择、包扫描与固定实现选择。
 9. [创建计划执行](09-create-plan-execution.md)：预检、锁、文件事务、事件、取消与补偿。
 10. [模拟器运行时闭环](10-runtime-lifecycle.md)：发现、开机判定、脱离启动与分级停止。
+11. [CLI 与 Swift 出口](11-cli-swift-outlets.md)：命令、NDJSON、退出码、UniFFI 与 Swift 并发适配。
+12. [macOS arm64 集成测试](12-integration-testing.md)：真实工具链生命周期、隔离和清理。

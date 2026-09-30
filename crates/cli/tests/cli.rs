@@ -97,6 +97,21 @@ fn creates_shows_and_requires_approval_for_plans() {
 }
 
 #[test]
+fn destructive_device_commands_require_approval() {
+    for arguments in [
+        vec!["devices", "delete", "avdkit_test_cli"],
+        vec!["devices", "cleanup-tests"],
+    ] {
+        let output = command().args(arguments).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("--approve"),
+            "{output:?}"
+        );
+    }
+}
+
+#[test]
 fn json_long_operation_ends_with_an_ndjson_error_result() {
     let path = plan_path("ndjson");
     let create = command()

@@ -66,6 +66,104 @@ pub(crate) async fn execute_create(
     .await
 }
 
+pub(crate) async fn execute_delete(
+    id: model::AvdId,
+    snapshot: EnvironmentSnapshot,
+    metrics: model::AndroidCliMetrics,
+    events: mpsc::UnboundedSender<Event>,
+    cancellation: CancellationToken,
+) -> Result<OperationResult, Error> {
+    execute_delete_with_backend(
+        id,
+        snapshot,
+        metrics,
+        events,
+        cancellation,
+        Arc::new(RealBackend {
+            runner: Runner::default(),
+        }),
+    )
+    .await
+}
+
+async fn execute_delete_with_backend(
+    id: model::AvdId,
+    snapshot: EnvironmentSnapshot,
+    metrics: model::AndroidCliMetrics,
+    events: mpsc::UnboundedSender<Event>,
+    cancellation: CancellationToken,
+    backend: Arc<dyn Backend>,
+) -> Result<OperationResult, Error> {
+    let _process_lock = ProcessWriteLock::acquire(vec![format!("name:{id}")])?;
+    check_cancelled(&cancellation)?;
+    require_android_cli_avd_layout(&snapshot)?;
+    blocking({
+        let root = snapshot.paths.avd_root.clone();
+        let user_root = snapshot.paths.user_root.clone();
+        let id = id.clone();
+        move || {
+            avdfs::AvdStore::new(root, user_root).get(&id)?;
+            Ok(())
+        }
+    })
+    .await?;
+    ensure_not_running(backend.as_ref(), &id, &snapshot, &events, &cancellation).await?;
+
+    let directory_locks = blocking({
+        let root = snapshot.paths.avd_root.clone();
+        let keys = vec![format!("name:{id}")];
+        move || DirectoryLocks::acquire(&root, &keys)
+    })
+    .await?;
+    check_cancelled(&cancellation)?;
+
+    start_step(&events, "delete", "delete the Android virtual device");
+    let android = tool_path(&snapshot, &snapshot.tool_names.android)?;
+    let environment = drivers::ToolEnvironment::from(&snapshot.paths);
+    let output = backend
+        .execute(
+            drivers::Invocation::android(
+                android,
+                &snapshot.paths.sdk_root,
+                metrics,
+                [
+                    "emulator".into(),
+                    "remove".into(),
+                    "--force".into(),
+                    id.as_str().into(),
+                ],
+            )
+            .with_environment(&environment),
+            &cancellation,
+        )
+        .await
+        .map_err(|error| failed(error, "delete"))?;
+    emit_output(&events, &output);
+    drivers::android::require_success(&output, "Android CLI failed to delete the AVD")
+        .map_err(|error| failed(error, "delete"))?;
+
+    let remains = blocking({
+        let root = snapshot.paths.avd_root.clone();
+        let user_root = snapshot.paths.user_root.clone();
+        let id = id.clone();
+        move || avdfs::AvdStore::new(root, user_root).contains_paths(&id)
+    })
+    .await
+    .map_err(|error| failed(error, "delete"))?;
+    if remains {
+        return Err(failed(
+            Error::new(
+                ErrorCode::Internal,
+                format!("Android virtual device {id} remained after deletion"),
+            ),
+            "delete",
+        ));
+    }
+    finish_step(&events, "delete", "Android virtual device deleted");
+    drop(directory_locks);
+    Ok(OperationResult::DeviceDeleted { id })
+}
+
 async fn execute_create_with_backend(
     operation_id: String,
     draft: CreateDeviceDraft,
@@ -214,9 +312,10 @@ async fn preflight(
     cancellation: &CancellationToken,
 ) -> Result<(), Error> {
     validate_image(&draft.image)?;
+    require_android_cli_avd_layout(snapshot)?;
     tool_path(snapshot, &snapshot.tool_names.android)?;
     tool_path(snapshot, &snapshot.tool_names.emulator)?;
-    let adb = tool_path(snapshot, &snapshot.tool_names.adb)?;
+    tool_path(snapshot, &snapshot.tool_names.adb)?;
 
     require_package(snapshot, PackageKind::Emulator, "emulator")?;
     require_package(snapshot, PackageKind::PlatformTools, "platform-tools")?;
@@ -248,7 +347,29 @@ async fn preflight(
     })
     .await?;
 
+    ensure_not_running(backend, &draft.id, snapshot, events, cancellation).await
+}
+
+fn require_android_cli_avd_layout(snapshot: &EnvironmentSnapshot) -> Result<(), Error> {
+    let supported_root = snapshot.paths.user_root.join("avd");
+    if snapshot.paths.avd_root == supported_root {
+        Ok(())
+    } else {
+        Err(Error::not_implemented(
+            "Android CLI create and delete with a separate AVD directory",
+        ))
+    }
+}
+
+async fn ensure_not_running(
+    backend: &dyn Backend,
+    id: &model::AvdId,
+    snapshot: &EnvironmentSnapshot,
+    events: &mpsc::UnboundedSender<Event>,
+    cancellation: &CancellationToken,
+) -> Result<(), Error> {
     check_cancelled(cancellation)?;
+    let adb = tool_path(snapshot, &snapshot.tool_names.adb)?;
     let environment = drivers::ToolEnvironment::from(&snapshot.paths);
     let output = backend
         .execute(
@@ -294,10 +415,10 @@ async fn preflight(
                 "could not determine a running emulator's AVD identifier",
             ));
         }
-        if output.stdout.trim() == draft.id.as_str() {
+        if output.stdout.trim() == id.as_str() {
             return Err(Error::new(
                 ErrorCode::DeviceRunning,
-                format!("Android virtual device {} is running", draft.id),
+                format!("Android virtual device {id} is running"),
             ));
         }
     }
@@ -676,6 +797,16 @@ mod tests {
                         stderr: String::new(),
                     }),
                     drivers::Tool::Android => {
+                        if invocation.args.iter().any(|argument| argument == "remove") {
+                            let id = model::AvdId::new(invocation.args.last().unwrap()).unwrap();
+                            let root = PathBuf::from(&invocation.environment["ANDROID_AVD_HOME"]);
+                            avdfs::remove_created_artifacts(&root, &id).unwrap();
+                            return Ok(process::Output {
+                                status: Some(0),
+                                stdout: format!("Successfully removed device '{id}'.\n"),
+                                stderr: String::new(),
+                            });
+                        }
                         let profile = invocation.args.last().unwrap();
                         let root = PathBuf::from(&invocation.environment["ANDROID_AVD_HOME"]);
                         let directory = root.join(format!("{profile}.avd"));
@@ -962,6 +1093,77 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::PackageNotFound);
         assert!(!snapshot.paths.avd_root.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_a_separate_avd_home_before_android_cli_runs() {
+        let root = temp_root("separate-avd-home");
+        let draft = draft("separate_avd_home");
+        let mut snapshot = snapshot(&root, &draft.image);
+        snapshot.paths.avd_root = root.join("separate-avd");
+        let (events, _receiver) = mpsc::unbounded_channel();
+
+        let error = execute_create_with_backend(
+            "operation-separate-avd-home".into(),
+            draft,
+            snapshot.clone(),
+            AndroidCliMetrics::Inherit,
+            events,
+            CancellationToken::new(),
+            Arc::new(FakeBackend {
+                malformed_create: false,
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::CapabilityUnavailable);
+        assert!(!snapshot.paths.avd_root.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn deletes_a_stopped_device_and_verifies_artifacts_are_gone() {
+        let root = temp_root("delete");
+        let draft = draft("delete");
+        let snapshot = snapshot(&root, &draft.image);
+        let directory = snapshot.paths.avd_root.join(format!("{}.avd", draft.id));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            snapshot.paths.avd_root.join(format!("{}.ini", draft.id)),
+            format!("path={}\ntarget=android-36\n", directory.display()),
+        )
+        .unwrap();
+        fs::write(directory.join("config.ini"), "target=android-36\n").unwrap();
+        let (events, mut receiver) = mpsc::unbounded_channel();
+
+        let result = execute_delete_with_backend(
+            draft.id.clone(),
+            snapshot.clone(),
+            AndroidCliMetrics::Inherit,
+            events,
+            CancellationToken::new(),
+            Arc::new(FakeBackend {
+                malformed_create: false,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result,
+            OperationResult::DeviceDeleted {
+                id: draft.id.clone()
+            }
+        );
+        assert!(
+            !avdfs::AvdStore::new(&snapshot.paths.avd_root, &snapshot.paths.user_root)
+                .contains_paths(&draft.id)
+                .unwrap()
+        );
+        assert!(std::iter::from_fn(|| receiver.try_recv().ok())
+            .any(|event| matches!(event, Event::StepFinished { step, .. } if step == "delete")));
         fs::remove_dir_all(root).unwrap();
     }
 

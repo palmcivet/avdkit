@@ -104,9 +104,9 @@ Swift Task / CLI 信号
   → ProcessGroup
 ```
 
-UniFFI 生成的 Swift async 桥接不会自动传播 `Task.cancel()`。Swift 易用层必须使用 `withTaskCancellationHandler` 调用 `Operation.cancel()`；验证代码在 `experiments/uniffi-swift/`，结果见[实测记录](findings/uniffi-swift.md)。
+UniFFI 生成的 Swift async 桥接不会自动传播 `Task.cancel()`。Swift 易用层使用 `withTaskCancellationHandler` 调用 `Operation.cancel()`；独立实验结果见[实测记录](findings/uniffi-swift.md)，正式绑定还用临时 Android CLI 工具进程重复验证同一链路。
 
-创建计划执行已经用这条链路运行 Android CLI；取消创建会终止工具进程组，并在需要时清理部分创建的 AVD。Swift Task 到 `Operation.cancel()` 的桥接仍只在独立实验中验证。
+创建计划执行已经用这条链路运行 Android CLI；取消创建会终止工具进程组，并在需要时清理部分创建的 AVD。Swift 验证程序确认 `Task.cancel()` 会经正式 `Operation` 绑定结束真实 shell 及其子进程。
 
 ## 为什么终止进程组
 

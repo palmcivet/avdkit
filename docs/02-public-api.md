@@ -121,7 +121,7 @@ let result = operation.result().await?;
 operation.cancel();
 ```
 
-`Operation`、计划执行器、运行时执行器、驱动和进程执行层使用同一种取消令牌。创建和模拟器生命周期操作的取消会沿这条链路终止对应进程组，最终结果使用 `cancelled`。
+`Operation`、计划执行器、运行时执行器、驱动和进程执行层使用同一种取消令牌。创建和模拟器生命周期操作的取消会沿这条链路终止对应进程组，最终结果使用 `cancelled`。`next_event()` 与 `result()` 使用共享引用，便于 UniFFI 对象安全地跨 Swift Task 使用；最终结果仍只能取得一次。
 
 启动会在新会话中运行 emulator，等待发现、adb 和开机就绪；停止先使用 adb，再按超时升级到进程组信号。安装和删除入口尚未接入真实驱动，调用时仍返回 `capability_unavailable`。
 

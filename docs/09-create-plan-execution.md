@@ -13,6 +13,7 @@
 执行在创建 AVD 前固定使用 `Kit` 持有的环境快照，并检查：
 
 - Android CLI、emulator 和 adb 都处于可用状态；
+- AVD 根目录等于 Android 用户目录下的 `avd`；当前 Android CLI 忽略单独的 `ANDROID_AVD_HOME`，其他布局在调用工具前返回 `not_implemented`；
 - emulator、platform-tools 和目标系统镜像已安装；
 - 镜像目录仍存在，且镜像 ID 包含 API、tag 和 ABI；
 - 目标 ID 与 Android CLI 临时使用的档位 ID 都没有索引或目录冲突；

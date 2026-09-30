@@ -226,11 +226,24 @@ impl Kit {
     }
 
     /// Starts an operation that deletes an AVD.
-    pub fn delete_device(&self, _id: AvdId) -> Operation {
-        match self.require_capability(CapabilityId::DevicesDelete) {
-            Ok(()) => Operation::not_implemented("devices.delete"),
-            Err(error) => Operation::failed(error),
+    pub fn delete_device(&self, id: AvdId) -> Operation {
+        if let Err(error) = self.require_capability(CapabilityId::DevicesDelete) {
+            return Operation::failed(error);
         }
+        let snapshot = match self.read_report() {
+            Ok(report) => report.snapshot,
+            Err(error) => return Operation::failed(error),
+        };
+        let metrics = self.config.policy.android_cli_metrics;
+        Operation::spawn(move |_operation_id, events, cancellation| {
+            Box::pin(executor::execute_delete(
+                id,
+                snapshot,
+                metrics,
+                events,
+                cancellation,
+            ))
+        })
     }
 
     /// Lists discovered running emulator instances.
