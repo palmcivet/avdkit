@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 /// A stable identifier for an operation that callers can query before use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum CapabilityId {
     /// Read the cached environment report.
     Environment,
@@ -26,7 +27,9 @@ pub enum CapabilityId {
     DevicesGet,
     /// List device profiles.
     DevicesProfiles,
-    /// Compile a device-creation plan using preset hardware.
+    /// Create a device by executing a compiled plan with preset hardware.
+    ///
+    /// Compiling a plan is a pure operation and does not require this capability.
     DevicesPlanCreate,
     /// Compile a device-creation plan using custom hardware.
     DevicesPlanCreateCustomHardware,
@@ -154,6 +157,7 @@ pub struct Capability {
 /// A stable machine-readable reason for capability unavailability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ReasonCode {
     /// The library has no implementation yet.
     NotImplemented,
@@ -213,6 +217,7 @@ impl Reason {
 /// How a caller can apply a remedy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RemedyKind {
     /// Invoke another library operation.
     LibraryOperation,

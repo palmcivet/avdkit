@@ -10,7 +10,7 @@ func defaultConfigurationQueriesEnvironment() async throws {
 }
 
 @Test
-func operationEventsAndFinalErrorAreObservable() async throws {
+func rejectedOperationHasNoEventsAndAFinalError() async throws {
     let kit = try Kit(config: defaultKitConfig())
     let package = PackageId(
         kind: .systemImage,
@@ -24,7 +24,7 @@ func operationEventsAndFinalErrorAreObservable() async throws {
     for try await event in operation.events {
         events.append(event)
     }
-    #expect(!events.isEmpty)
+    #expect(events.isEmpty)
     do {
         _ = try await operation.value()
         Issue.record("unsupported installation should fail")

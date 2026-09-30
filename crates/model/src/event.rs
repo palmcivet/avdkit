@@ -13,6 +13,7 @@ pub enum LogStream {
 /// Incremental update emitted by a long-running operation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Event {
     /// A plan step began.
     StepStarted {

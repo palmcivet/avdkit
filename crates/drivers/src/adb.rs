@@ -94,12 +94,12 @@ fn parse_device(output: &Output, line: &str) -> Result<Device, Error> {
 
 fn unrecognized(output: &Output, message: &str) -> Error {
     let mut error = Error::new(ErrorCode::ToolOutputUnrecognized, message);
-    error.diagnostic = Some(Diagnostic {
+    error.diagnostic = Some(Box::new(Diagnostic {
         command: None,
         stdout: Some(output.stdout.clone()),
         stderr: Some(output.stderr.clone()),
         exit_status: output.status,
-    });
+    }));
     error
 }
 

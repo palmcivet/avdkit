@@ -1,7 +1,5 @@
 //! File-level operations for AVD metadata.
 
-#![allow(clippy::result_large_err)]
-
 use std::{
     fmt::Write,
     fs,

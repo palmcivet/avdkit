@@ -94,12 +94,12 @@ fn error_matches_golden_contract() {
         "version output is invalid",
     );
     error.failed_step = Some("read_version".into());
-    error.diagnostic = Some(Diagnostic {
+    error.diagnostic = Some(Box::new(Diagnostic {
         command: Some("android --version".into()),
         stdout: Some("unknown\n".into()),
         stderr: Some(String::new()),
         exit_status: Some(0),
-    });
+    }));
 
     assert_golden(&error, include_str!("golden/error.json"));
 }

@@ -1,7 +1,5 @@
 //! Thin adapters around the official Android command-line tools.
 
-#![allow(clippy::result_large_err)]
-
 pub mod adb;
 pub mod android;
 pub mod emulator;
@@ -54,11 +52,10 @@ impl From<&PlatformPaths> for ToolEnvironment {
 
 impl ToolEnvironment {
     fn variables(&self) -> BTreeMap<String, String> {
+        let sdk_root = self.sdk_root.to_string_lossy().into_owned();
         let mut variables = BTreeMap::from([
-            (
-                "ANDROID_SDK_ROOT".into(),
-                self.sdk_root.to_string_lossy().into_owned(),
-            ),
+            ("ANDROID_HOME".into(), sdk_root.clone()),
+            ("ANDROID_SDK_ROOT".into(), sdk_root),
             (
                 "ANDROID_USER_HOME".into(),
                 self.user_root.to_string_lossy().into_owned(),
@@ -206,6 +203,7 @@ mod tests {
         let command = Invocation::adb(PathBuf::from("/bin/adb"), ["devices".into()])
             .with_environment(&environment)
             .command();
+        assert_eq!(command.environment["ANDROID_HOME"], "/sdk");
         assert_eq!(command.environment["ANDROID_SDK_ROOT"], "/sdk");
         assert_eq!(command.environment["ANDROID_USER_HOME"], "/user");
         assert_eq!(command.environment["ANDROID_AVD_HOME"], "/avd");

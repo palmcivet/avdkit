@@ -1,6 +1,6 @@
 use model::{
     Capability, CapabilityId, CapabilityMatrix, CapabilityState, EnvironmentSnapshot, Error,
-    PlanKind, Reason, ReasonCode, ToolState,
+    Reason, ReasonCode, ToolState,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8,12 +8,10 @@ pub(crate) enum Implementation {
     PlatformProbe,
     AvdFiles,
     AndroidCli,
-    AndroidCliWithAdb,
     InstalledSdkFiles,
     RuntimeDiscovery,
     EmulatorBinary,
     AdbEmuKill,
-    PlanCompiler,
 }
 
 impl Implementation {
@@ -22,19 +20,34 @@ impl Implementation {
             Self::PlatformProbe => "platform_probe",
             Self::AvdFiles => "avd_files",
             Self::AndroidCli => "android_cli",
-            Self::AndroidCliWithAdb => "android_cli",
             Self::InstalledSdkFiles => "installed_sdk_files",
             Self::RuntimeDiscovery => "runtime_discovery",
             Self::EmulatorBinary => "emulator_binary",
             Self::AdbEmuKill => "adb_emu_kill",
-            Self::PlanCompiler => "plan_compiler",
         }
     }
 }
 
+/// A static condition that must hold before an implementation can run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Requirement {
+    AndroidCli,
+    Emulator,
+    Adb,
+    /// The Android CLI ignores a separate `ANDROID_AVD_HOME`, so AVDs it
+    /// creates or removes must live under the Android user directory.
+    AndroidCliAvdLayout,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Candidate {
+    pub(crate) implementation: Implementation,
+    pub(crate) requirements: &'static [Requirement],
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Route {
-    pub(crate) implementations: Vec<Implementation>,
+    pub(crate) candidates: Vec<Candidate>,
     pub(crate) implemented: bool,
 }
 
@@ -42,35 +55,67 @@ pub(crate) struct Route {
 pub(crate) struct Router;
 
 impl Router {
-    pub(crate) fn plan_tool(self, kind: PlanKind) -> Implementation {
-        match kind {
-            PlanKind::CreateDevice => Implementation::AndroidCli,
-        }
-    }
-
     pub(crate) fn route(self, id: CapabilityId) -> Route {
         use CapabilityId as Id;
         use Implementation as Impl;
+        use Requirement as Req;
 
-        let (implementations, implemented) = match id {
-            Id::Environment | Id::Capabilities | Id::Refresh => (vec![Impl::PlatformProbe], true),
-            Id::PackagesListInstalled => (vec![Impl::InstalledSdkFiles], true),
+        let candidate = |implementation, requirements| Candidate {
+            implementation,
+            requirements,
+        };
+        let (candidates, implemented) = match id {
+            Id::Environment | Id::Capabilities | Id::Refresh => {
+                (vec![candidate(Impl::PlatformProbe, &[])], true)
+            }
+            Id::PackagesListInstalled => (vec![candidate(Impl::InstalledSdkFiles, &[])], true),
             Id::PackagesListAvailable
             | Id::PackagesInstall
             | Id::PackagesRemove
-            | Id::PackagesUpdate => (vec![Impl::AndroidCli], false),
-            Id::DevicesList | Id::DevicesGet => (vec![Impl::AvdFiles], true),
-            Id::DevicesProfiles => (vec![Impl::AndroidCli], true),
-            Id::DevicesPlanCreate => (vec![Impl::PlanCompiler], true),
-            Id::DevicesDelete => (vec![Impl::AndroidCliWithAdb], true),
-            Id::RuntimeRunning | Id::RuntimeBootStatus => (vec![Impl::RuntimeDiscovery], true),
-            Id::RuntimeStart => (vec![Impl::EmulatorBinary], true),
-            Id::RuntimeStartCustom => (vec![Impl::EmulatorBinary], false),
-            Id::RuntimeStop => (vec![Impl::AdbEmuKill, Impl::AndroidCli], true),
+            | Id::PackagesUpdate => (vec![candidate(Impl::AndroidCli, &[Req::AndroidCli])], false),
+            Id::DevicesList | Id::DevicesGet => (vec![candidate(Impl::AvdFiles, &[])], true),
+            Id::DevicesProfiles => (vec![candidate(Impl::AndroidCli, &[Req::AndroidCli])], true),
+            Id::DevicesPlanCreate => (
+                vec![candidate(
+                    Impl::AndroidCli,
+                    &[
+                        Req::AndroidCli,
+                        Req::Emulator,
+                        Req::Adb,
+                        Req::AndroidCliAvdLayout,
+                    ],
+                )],
+                true,
+            ),
+            Id::DevicesDelete => (
+                vec![candidate(
+                    Impl::AndroidCli,
+                    &[Req::AndroidCli, Req::Adb, Req::AndroidCliAvdLayout],
+                )],
+                true,
+            ),
+            Id::RuntimeRunning | Id::RuntimeBootStatus => {
+                (vec![candidate(Impl::RuntimeDiscovery, &[Req::Adb])], true)
+            }
+            Id::RuntimeStart => (
+                vec![candidate(Impl::EmulatorBinary, &[Req::Emulator, Req::Adb])],
+                true,
+            ),
+            Id::RuntimeStartCustom => (
+                vec![candidate(Impl::EmulatorBinary, &[Req::Emulator, Req::Adb])],
+                false,
+            ),
+            Id::RuntimeStop => (
+                vec![
+                    candidate(Impl::AdbEmuKill, &[Req::Adb]),
+                    candidate(Impl::AndroidCli, &[Req::AndroidCli]),
+                ],
+                true,
+            ),
             _ => (Vec::new(), false),
         };
         Route {
-            implementations,
+            candidates,
             implemented,
         }
     }
@@ -93,158 +138,93 @@ impl Router {
         id: CapabilityId,
         snapshot: &EnvironmentSnapshot,
     ) -> Result<Implementation, Error> {
-        let route = self.route(id);
-        route
-            .implementations
-            .into_iter()
-            .find(|implementation| self.is_available(*implementation, snapshot))
+        self.route(id)
+            .candidates
+            .iter()
+            .find(|candidate| is_available(candidate, snapshot))
+            .map(|candidate| candidate.implementation)
             .ok_or_else(|| Error::not_implemented(id.as_str()))
     }
 
     fn state(self, id: CapabilityId, snapshot: &EnvironmentSnapshot) -> CapabilityState {
         let route = self.route(id);
         let selected = route
-            .implementations
+            .candidates
             .iter()
-            .copied()
-            .find(|implementation| self.is_available(*implementation, snapshot));
-        if route.implemented {
-            if let Some(implementation) = selected {
-                return CapabilityState::Available {
-                    implementation: implementation.as_str().into(),
-                };
-            }
+            .find(|candidate| is_available(candidate, snapshot));
+        if let (true, Some(candidate)) = (route.implemented, selected) {
+            return CapabilityState::Available {
+                implementation: candidate.implementation.as_str().into(),
+            };
         }
 
         let mut reasons = Vec::new();
-        if !snapshot.host.supported
-            && !route
-                .implementations
-                .contains(&Implementation::PlatformProbe)
-        {
+        let probe_only = route
+            .candidates
+            .iter()
+            .all(|candidate| candidate.implementation == Implementation::PlatformProbe);
+        if !snapshot.host.supported && !probe_only {
             reasons.push(Reason::new(
                 ReasonCode::PlatformNotSupported,
                 "this host platform is not implemented yet",
             ));
         }
-        if !route.implementations.is_empty()
-            && selected.is_none()
-            && snapshot.host.supported
-            && route
-                .implementations
-                .iter()
-                .any(|implementation| self.requires_tool(*implementation))
-        {
-            reasons.extend(self.tool_reasons(&route, snapshot));
+        if snapshot.host.supported && selected.is_none() {
+            for candidate in &route.candidates {
+                for requirement in candidate.requirements {
+                    for reason in unmet_reasons(*requirement, snapshot) {
+                        if !reasons.contains(&reason) {
+                            reasons.push(reason);
+                        }
+                    }
+                }
+            }
         }
-        if !route.implemented {
-            reasons.push(Reason::not_implemented());
-        }
-        if id == CapabilityId::DevicesDelete && !android_cli_avd_layout_supported(snapshot) {
-            reasons.push(Reason::new(
-                ReasonCode::NotImplemented,
-                "Android CLI does not support a separate AVD directory",
-            ));
-        }
-        if reasons.is_empty() {
+        if !route.implemented || reasons.is_empty() {
             reasons.push(Reason::not_implemented());
         }
         CapabilityState::Unavailable { reasons }
     }
+}
 
-    fn is_available(self, implementation: Implementation, snapshot: &EnvironmentSnapshot) -> bool {
-        if implementation == Implementation::PlatformProbe {
-            return true;
-        }
-        if !snapshot.host.supported {
-            return false;
-        }
-        match implementation {
-            Implementation::AndroidCli => tool_available(snapshot, &snapshot.tool_names.android),
-            Implementation::AndroidCliWithAdb => {
-                tool_available(snapshot, &snapshot.tool_names.android)
-                    && tool_available(snapshot, &snapshot.tool_names.adb)
-                    && android_cli_avd_layout_supported(snapshot)
-            }
-            Implementation::RuntimeDiscovery | Implementation::AdbEmuKill => {
-                tool_available(snapshot, &snapshot.tool_names.adb)
-            }
-            Implementation::EmulatorBinary => {
-                tool_available(snapshot, &snapshot.tool_names.emulator)
-                    && tool_available(snapshot, &snapshot.tool_names.adb)
-            }
-            Implementation::AvdFiles
-            | Implementation::InstalledSdkFiles
-            | Implementation::PlanCompiler => true,
-            Implementation::PlatformProbe => true,
-        }
+fn is_available(candidate: &Candidate, snapshot: &EnvironmentSnapshot) -> bool {
+    if candidate.implementation == Implementation::PlatformProbe {
+        return true;
     }
-
-    fn requires_tool(self, implementation: Implementation) -> bool {
-        matches!(
-            implementation,
-            Implementation::AndroidCli
-                | Implementation::AndroidCliWithAdb
-                | Implementation::RuntimeDiscovery
-                | Implementation::EmulatorBinary
-                | Implementation::AdbEmuKill
-        )
-    }
-
-    fn tool_reasons(self, route: &Route, snapshot: &EnvironmentSnapshot) -> Vec<Reason> {
-        let mut names = route
-            .implementations
+    snapshot.host.supported
+        && candidate
+            .requirements
             .iter()
-            .filter_map(|implementation| match implementation {
-                Implementation::AndroidCli => Some(&snapshot.tool_names.android),
-                Implementation::AndroidCliWithAdb => Some(&snapshot.tool_names.android),
-                Implementation::RuntimeDiscovery | Implementation::AdbEmuKill => {
-                    Some(&snapshot.tool_names.adb)
-                }
-                Implementation::EmulatorBinary => Some(&snapshot.tool_names.emulator),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        if route
-            .implementations
-            .contains(&Implementation::EmulatorBinary)
-        {
-            names.push(&snapshot.tool_names.adb);
-        }
-        if route
-            .implementations
-            .contains(&Implementation::AndroidCliWithAdb)
-        {
-            names.push(&snapshot.tool_names.adb);
-        }
-        let mut reasons = Vec::new();
-        for name in names {
-            match snapshot.tools.iter().find(|tool| &tool.name == name) {
-                Some(tool) if tool.state == ToolState::Available => {}
-                Some(tool) if !tool.reasons.is_empty() => reasons.extend(tool.reasons.clone()),
-                Some(tool) if tool.state == ToolState::Unavailable => reasons.push(Reason::new(
-                    ReasonCode::ToolNotReady,
-                    format!("{name} is not ready"),
-                )),
-                _ => reasons.push(Reason::new(
-                    ReasonCode::ToolNotFound,
-                    format!("{name} was not found"),
-                )),
+            .all(|requirement| unmet_reasons(*requirement, snapshot).is_empty())
+}
+
+fn unmet_reasons(requirement: Requirement, snapshot: &EnvironmentSnapshot) -> Vec<Reason> {
+    let name = match requirement {
+        Requirement::AndroidCli => &snapshot.tool_names.android,
+        Requirement::Emulator => &snapshot.tool_names.emulator,
+        Requirement::Adb => &snapshot.tool_names.adb,
+        Requirement::AndroidCliAvdLayout => {
+            if snapshot.paths.avd_root == snapshot.paths.user_root.join("avd") {
+                return Vec::new();
             }
+            return vec![Reason::new(
+                ReasonCode::NotImplemented,
+                "Android CLI does not support a separate AVD directory",
+            )];
         }
-        reasons
+    };
+    match snapshot.tools.iter().find(|tool| &tool.name == name) {
+        Some(tool) if tool.state == ToolState::Available => Vec::new(),
+        Some(tool) if !tool.reasons.is_empty() => tool.reasons.clone(),
+        Some(tool) if tool.state == ToolState::Unavailable => vec![Reason::new(
+            ReasonCode::ToolNotReady,
+            format!("{name} is not ready"),
+        )],
+        _ => vec![Reason::new(
+            ReasonCode::ToolNotFound,
+            format!("{name} was not found"),
+        )],
     }
-}
-
-fn android_cli_avd_layout_supported(snapshot: &EnvironmentSnapshot) -> bool {
-    snapshot.paths.avd_root == snapshot.paths.user_root.join("avd")
-}
-
-fn tool_available(snapshot: &EnvironmentSnapshot, name: &str) -> bool {
-    snapshot
-        .tools
-        .iter()
-        .any(|tool| tool.name == name && tool.state == ToolState::Available)
 }
 
 #[cfg(test)]
@@ -306,35 +286,67 @@ mod tests {
         }
     }
 
+    fn implementations(id: CapabilityId) -> Vec<Implementation> {
+        Router
+            .route(id)
+            .candidates
+            .into_iter()
+            .map(|candidate| candidate.implementation)
+            .collect()
+    }
+
+    fn state(snapshot: &EnvironmentSnapshot, id: CapabilityId) -> CapabilityState {
+        Router
+            .matrix(snapshot)
+            .capability(id)
+            .unwrap()
+            .state
+            .clone()
+    }
+
     #[test]
     fn fixed_routes_match_the_p0_preferences() {
-        let router = Router;
         assert_eq!(
-            router.route(CapabilityId::DevicesList).implementations,
+            implementations(CapabilityId::DevicesList),
             [Implementation::AvdFiles]
         );
         assert_eq!(
-            router.route(CapabilityId::DevicesProfiles).implementations,
+            implementations(CapabilityId::DevicesProfiles),
             [Implementation::AndroidCli]
         );
         assert_eq!(
-            router.route(CapabilityId::RuntimeStop).implementations,
+            implementations(CapabilityId::RuntimeStop),
             [Implementation::AdbEmuKill, Implementation::AndroidCli]
         );
         assert_eq!(
-            router.route(CapabilityId::DevicesDelete).implementations,
-            [Implementation::AndroidCliWithAdb]
+            implementations(CapabilityId::DevicesPlanCreate),
+            [Implementation::AndroidCli]
         );
         assert_eq!(
-            router
-                .route(CapabilityId::PackagesListInstalled)
-                .implementations,
+            implementations(CapabilityId::DevicesDelete),
+            [Implementation::AndroidCli]
+        );
+        assert_eq!(
+            implementations(CapabilityId::PackagesListInstalled),
             [Implementation::InstalledSdkFiles]
         );
-        assert_eq!(
-            router.plan_tool(PlanKind::CreateDevice),
-            Implementation::AndroidCli
-        );
+    }
+
+    #[test]
+    fn create_capability_reports_every_tool_that_execution_needs() {
+        assert!(matches!(
+            state(&snapshot(&["android"]), CapabilityId::DevicesPlanCreate),
+            CapabilityState::Unavailable { reasons }
+                if reasons.len() == 2
+                    && reasons.iter().all(|reason| reason.code == ReasonCode::ToolNotFound)
+        ));
+        assert!(matches!(
+            state(
+                &snapshot(&["android", "emulator", "adb"]),
+                CapabilityId::DevicesPlanCreate
+            ),
+            CapabilityState::Available { implementation } if implementation == "android_cli"
+        ));
     }
 
     #[test]
@@ -344,7 +356,6 @@ mod tests {
             CapabilityId::PackagesListInstalled,
             CapabilityId::DevicesList,
             CapabilityId::DevicesGet,
-            CapabilityId::DevicesPlanCreate,
         ] {
             assert!(matches!(
                 matrix.capability(id).map(|entry| &entry.state),
@@ -416,24 +427,16 @@ mod tests {
     }
 
     #[test]
-    fn delete_rejects_an_avd_root_ignored_by_android_cli() {
-        let mut snapshot = snapshot(&["android", "adb"]);
+    fn android_cli_writes_reject_an_avd_root_it_ignores() {
+        let mut snapshot = snapshot(&["android", "emulator", "adb"]);
         snapshot.paths.avd_root = PathBuf::from("/separate-avd");
-        let matrix = Router.matrix(&snapshot);
-
-        assert!(matches!(
-            &matrix
-                .capability(CapabilityId::DevicesDelete)
-                .unwrap()
-                .state,
-            CapabilityState::Unavailable { reasons }
-                if reasons.iter().any(|reason| {
-                    reason.code == ReasonCode::NotImplemented
-                })
-                && reasons.iter().all(|reason| {
-                    reason.code != ReasonCode::ToolNotFound
-                })
-        ));
+        for id in [CapabilityId::DevicesPlanCreate, CapabilityId::DevicesDelete] {
+            assert!(matches!(
+                state(&snapshot, id),
+                CapabilityState::Unavailable { reasons }
+                    if reasons.len() == 1 && reasons[0].code == ReasonCode::NotImplemented
+            ));
+        }
     }
 
     #[test]

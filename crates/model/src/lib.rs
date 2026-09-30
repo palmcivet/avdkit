@@ -1,6 +1,8 @@
 //! Serializable public data types shared by every outlet.
+//!
+//! Enums whose variant set grows with new tools, platforms, or operations are
+//! `#[non_exhaustive]`; closed sets such as [`Field`] and [`LogStream`] are not.
 
-#![allow(clippy::result_large_err)]
 #![deny(missing_docs)]
 
 /// Product-name-derived identifiers.
@@ -46,7 +48,7 @@ pub use environment::{
 pub use error::{CompensationResult, Diagnostic, Error, ErrorCode, ModelError};
 pub use event::{Event, LogStream};
 pub use field::Field;
-pub use host::{CpuArchitecture, Description, Host, Platform, PlatformPaths, ToolNames};
+pub use host::{CpuArchitecture, Host, Platform, PlatformPaths, ToolNames};
 pub use ids::{AvdId, PackageId, PackageKind, ProfileId, Revision, Serial};
 pub use plan::{
     Compensation, CreateDeviceDraft, OperationResult, Plan, PlanIntent, PlanKind, PlanStep,

@@ -97,6 +97,40 @@ fn creates_shows_and_requires_approval_for_plans() {
 }
 
 #[test]
+fn plan_files_carry_and_check_the_schema_version() {
+    let path = plan_path("schema");
+    let output = command()
+        .args([
+            "plan",
+            "create",
+            "--id",
+            "avdkit_test_cli_schema",
+            "--profile",
+            "medium_phone",
+            "--image",
+            "system-images;android-999;google_apis;arm64-v8a",
+            "--output",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let mut file: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(file["schema_version"], "0.1.0");
+    assert_eq!(file["data"]["kind"], "create_device");
+
+    file["schema_version"] = "0.0.0".into();
+    fs::write(&path, file.to_string()).unwrap();
+    let output = command()
+        .args(["plan", "show", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("schema 0.0.0"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn destructive_device_commands_require_approval() {
     for arguments in [
         vec!["devices", "delete", "avdkit_test_cli"],

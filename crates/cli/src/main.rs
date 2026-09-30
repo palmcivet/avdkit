@@ -1,5 +1,3 @@
-#![allow(clippy::result_large_err)]
-
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -10,6 +8,7 @@ use clap::{Parser, Subcommand};
 use kit::{
     test_avd_prefix, AvdId, CreateDeviceDraft, Envelope, Error, ErrorCode, Event, Field,
     HardwareConfig, Kit, KitConfig, Operation, PackageId, PackageKind, Plan, ProfileId,
+    SCHEMA_VERSION,
 };
 
 #[derive(Debug, Parser)]
@@ -385,6 +384,7 @@ fn render_event(event: &Event) {
             None => println!("progress unavailable"),
         },
         Event::Log { line, .. } => println!("{line}"),
+        _ => println!("{}", render_json_line(event)),
     }
 }
 
@@ -421,16 +421,27 @@ fn read_plan(path: &Path) -> Result<Plan, Error> {
             format!("read plan {}: {error}", path.display()),
         )
     })?;
-    serde_json::from_str(&contents).map_err(|error| {
+    let envelope: Envelope<Plan> = serde_json::from_str(&contents).map_err(|error| {
         Error::new(
             ErrorCode::InvalidInput,
             format!("parse plan {}: {error}", path.display()),
         )
-    })
+    })?;
+    if envelope.schema_version != SCHEMA_VERSION {
+        return Err(Error::new(
+            ErrorCode::InvalidInput,
+            format!(
+                "plan {} uses schema {}, but this build reads schema {SCHEMA_VERSION}",
+                path.display(),
+                envelope.schema_version
+            ),
+        ));
+    }
+    Ok(envelope.data)
 }
 
 fn write_plan(path: &Path, plan: &Plan) -> Result<(), Error> {
-    let contents = format!("{}\n", render_json(plan));
+    let contents = format!("{}\n", render_json(&Envelope::new(plan)));
     fs::write(path, contents).map_err(|error| {
         Error::new(
             ErrorCode::Internal,
@@ -462,7 +473,7 @@ fn exit_code(code: ErrorCode) -> u8 {
         | ErrorCode::NameConflict
         | ErrorCode::PackageNotFound => 4,
         ErrorCode::Cancelled | ErrorCode::Timeout => 5,
-        ErrorCode::LaunchFailed | ErrorCode::ToolOutputUnrecognized | ErrorCode::Internal => 1,
+        _ => 1,
     }
 }
 

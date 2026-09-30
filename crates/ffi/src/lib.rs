@@ -1,4 +1,8 @@
 //! UniFFI boundary shared by Swift and future foreign-language outlets.
+//!
+//! Core enums are `#[non_exhaustive]`, while foreign enums are frozen. Values
+//! added by a newer core map to an existing fallback where one is meaningful,
+//! and otherwise to an explicit `Unknown` case.
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -183,6 +187,7 @@ pub enum CapabilityId {
     SnapshotsSave,
     SnapshotsLoad,
     SnapshotsDelete,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
@@ -192,6 +197,7 @@ pub enum ReasonCode {
     ToolNotReady,
     PlatformNotSupported,
     CapabilityUnavailable,
+    Unknown,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -297,6 +303,7 @@ pub enum BootStatus {
     Booting,
     Ready,
     Stuck,
+    Unknown,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -327,6 +334,7 @@ pub struct StartOptions {
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
 pub enum PlanKind {
     CreateDevice,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
@@ -334,6 +342,7 @@ pub enum PlanStepKind {
     ToolCall,
     FileRewrite,
     CallerCustom,
+    Unknown,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -387,6 +396,9 @@ pub enum Event {
     Warning {
         message: String,
     },
+    Unknown {
+        json: String,
+    },
 }
 
 #[derive(Debug, Clone, uniffi::Enum)]
@@ -397,6 +409,7 @@ pub enum OperationResult {
     DeviceStarted { instance: RunningInstance },
     DeviceStopped { id: String },
     PlanCompleted { plan_id: String },
+    Unknown { json: String },
 }
 
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
@@ -618,7 +631,7 @@ impl From<core::ErrorCode> for ErrorCode {
             core::ErrorCode::Cancelled => Self::Cancelled,
             core::ErrorCode::PlatformNotSupported => Self::PlatformNotSupported,
             core::ErrorCode::InvalidInput => Self::InvalidInput,
-            core::ErrorCode::Internal => Self::Internal,
+            _ => Self::Internal,
         }
     }
 }
@@ -640,7 +653,7 @@ impl From<core::Error> for BindingError {
             core::ErrorCode::Cancelled => Self::Cancelled(details),
             core::ErrorCode::PlatformNotSupported => Self::PlatformNotSupported(details),
             core::ErrorCode::InvalidInput => Self::InvalidInput(details),
-            core::ErrorCode::Internal => Self::Internal(details),
+            _ => Self::Internal(details),
         }
     }
 }
@@ -724,7 +737,7 @@ impl From<core::Platform> for Platform {
             core::Platform::MacOs => Self::MacOs,
             core::Platform::Linux => Self::Linux,
             core::Platform::Windows => Self::Windows,
-            core::Platform::Unsupported => Self::Unsupported,
+            _ => Self::Unsupported,
         }
     }
 }
@@ -734,7 +747,7 @@ impl From<core::CpuArchitecture> for CpuArchitecture {
         match value {
             core::CpuArchitecture::Arm64 => Self::Arm64,
             core::CpuArchitecture::X86_64 => Self::X86_64,
-            core::CpuArchitecture::Other => Self::Other,
+            _ => Self::Other,
         }
     }
 }
@@ -847,6 +860,7 @@ impl From<core::CapabilityId> for CapabilityId {
             Id::SnapshotsSave => Self::SnapshotsSave,
             Id::SnapshotsLoad => Self::SnapshotsLoad,
             Id::SnapshotsDelete => Self::SnapshotsDelete,
+            _ => Self::Unknown,
         }
     }
 }
@@ -859,6 +873,7 @@ impl From<core::ReasonCode> for ReasonCode {
             core::ReasonCode::ToolNotReady => Self::ToolNotReady,
             core::ReasonCode::PlatformNotSupported => Self::PlatformNotSupported,
             core::ReasonCode::CapabilityUnavailable => Self::CapabilityUnavailable,
+            _ => Self::Unknown,
         }
     }
 }
@@ -903,7 +918,7 @@ impl From<core::PackageKind> for PackageKind {
             core::PackageKind::Emulator => Self::Emulator,
             core::PackageKind::PlatformTools => Self::PlatformTools,
             core::PackageKind::CommandLineTools => Self::CommandLineTools,
-            core::PackageKind::Other => Self::Other,
+            _ => Self::Other,
         }
     }
 }
@@ -1065,6 +1080,7 @@ impl From<core::BootStatus> for BootStatus {
             core::BootStatus::Booting => Self::Booting,
             core::BootStatus::Ready => Self::Ready,
             core::BootStatus::Stuck => Self::Stuck,
+            _ => Self::Unknown,
         }
     }
 }
@@ -1103,6 +1119,7 @@ impl From<core::PlanKind> for PlanKind {
     fn from(value: core::PlanKind) -> Self {
         match value {
             core::PlanKind::CreateDevice => Self::CreateDevice,
+            _ => Self::Unknown,
         }
     }
 }
@@ -1113,6 +1130,7 @@ impl From<core::PlanStepKind> for PlanStepKind {
             core::PlanStepKind::ToolCall => Self::ToolCall,
             core::PlanStepKind::FileRewrite => Self::FileRewrite,
             core::PlanStepKind::CallerCustom => Self::CallerCustom,
+            _ => Self::Unknown,
         }
     }
 }
@@ -1172,6 +1190,9 @@ impl From<core::Event> for Event {
                 line,
             },
             core::Event::Warning { message } => Self::Warning { message },
+            _ => Self::Unknown {
+                json: serde_json::to_string(&value).expect("public events must serialize"),
+            },
         }
     }
 }
@@ -1195,6 +1216,9 @@ impl From<core::OperationResult> for OperationResult {
                 Self::DeviceStopped { id: id.to_string() }
             }
             core::OperationResult::PlanCompleted { plan_id } => Self::PlanCompleted { plan_id },
+            _ => Self::Unknown {
+                json: serde_json::to_string(&value).expect("public results must serialize"),
+            },
         }
     }
 }
@@ -1300,13 +1324,16 @@ mod tests {
         assert_eq!(core, core::KitConfig::default());
     }
 
+    #[test]
+    fn every_current_capability_has_a_foreign_case() {
+        for id in core::CapabilityId::ALL {
+            assert!(!matches!(CapabilityId::from(*id), CapabilityId::Unknown));
+        }
+    }
+
     #[tokio::test]
     async fn operation_exports_events_cancellation_and_result() {
         let operation = Operation::new(core::Operation::not_implemented("ffi probe"));
-        assert!(matches!(
-            operation.next_event().await,
-            Some(Event::Warning { .. })
-        ));
         assert!(operation.next_event().await.is_none());
         let error = operation.result().await.unwrap_err();
         assert!(matches!(error, BindingError::CapabilityUnavailable(_)));

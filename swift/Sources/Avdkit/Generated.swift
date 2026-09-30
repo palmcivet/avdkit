@@ -3444,6 +3444,7 @@ public enum BootStatus {
     case booting
     case ready
     case stuck
+    case unknown
 }
 
 
@@ -3469,6 +3470,8 @@ public struct FfiConverterTypeBootStatus: FfiConverterRustBuffer {
         
         case 4: return .stuck
         
+        case 5: return .unknown
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -3491,6 +3494,10 @@ public struct FfiConverterTypeBootStatus: FfiConverterRustBuffer {
         
         case .stuck:
             writeInt(&buf, Int32(4))
+        
+        
+        case .unknown:
+            writeInt(&buf, Int32(5))
         
         }
     }
@@ -3548,6 +3555,7 @@ public enum CapabilityId {
     case snapshotsSave
     case snapshotsLoad
     case snapshotsDelete
+    case unknown
 }
 
 
@@ -3618,6 +3626,8 @@ public struct FfiConverterTypeCapabilityId: FfiConverterRustBuffer {
         case 26: return .snapshotsLoad
         
         case 27: return .snapshotsDelete
+        
+        case 28: return .unknown
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -3733,6 +3743,10 @@ public struct FfiConverterTypeCapabilityId: FfiConverterRustBuffer {
         
         case .snapshotsDelete:
             writeInt(&buf, Int32(27))
+        
+        
+        case .unknown:
+            writeInt(&buf, Int32(28))
         
         }
     }
@@ -4075,6 +4089,8 @@ public enum Event {
     )
     case warning(message: String
     )
+    case unknown(json: String
+    )
 }
 
 
@@ -4111,6 +4127,9 @@ public struct FfiConverterTypeEvent: FfiConverterRustBuffer {
         )
         
         case 7: return .warning(message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 8: return .unknown(json: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -4160,6 +4179,11 @@ public struct FfiConverterTypeEvent: FfiConverterRustBuffer {
         case let .warning(message):
             writeInt(&buf, Int32(7))
             FfiConverterString.write(message, into: &buf)
+            
+        
+        case let .unknown(json):
+            writeInt(&buf, Int32(8))
+            FfiConverterString.write(json, into: &buf)
             
         }
     }
@@ -4410,6 +4434,8 @@ public enum OperationResult {
     )
     case planCompleted(planId: String
     )
+    case unknown(json: String
+    )
 }
 
 
@@ -4443,6 +4469,9 @@ public struct FfiConverterTypeOperationResult: FfiConverterRustBuffer {
         )
         
         case 6: return .planCompleted(planId: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 7: return .unknown(json: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -4481,6 +4510,11 @@ public struct FfiConverterTypeOperationResult: FfiConverterRustBuffer {
         case let .planCompleted(planId):
             writeInt(&buf, Int32(6))
             FfiConverterString.write(planId, into: &buf)
+            
+        
+        case let .unknown(json):
+            writeInt(&buf, Int32(7))
+            FfiConverterString.write(json, into: &buf)
             
         }
     }
@@ -4614,6 +4648,7 @@ extension PackageKind: Equatable, Hashable {}
 public enum PlanKind {
     
     case createDevice
+    case unknown
 }
 
 
@@ -4633,6 +4668,8 @@ public struct FfiConverterTypePlanKind: FfiConverterRustBuffer {
         
         case 1: return .createDevice
         
+        case 2: return .unknown
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -4643,6 +4680,10 @@ public struct FfiConverterTypePlanKind: FfiConverterRustBuffer {
         
         case .createDevice:
             writeInt(&buf, Int32(1))
+        
+        
+        case .unknown:
+            writeInt(&buf, Int32(2))
         
         }
     }
@@ -4676,6 +4717,7 @@ public enum PlanStepKind {
     case toolCall
     case fileRewrite
     case callerCustom
+    case unknown
 }
 
 
@@ -4699,6 +4741,8 @@ public struct FfiConverterTypePlanStepKind: FfiConverterRustBuffer {
         
         case 3: return .callerCustom
         
+        case 4: return .unknown
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -4717,6 +4761,10 @@ public struct FfiConverterTypePlanStepKind: FfiConverterRustBuffer {
         
         case .callerCustom:
             writeInt(&buf, Int32(3))
+        
+        
+        case .unknown:
+            writeInt(&buf, Int32(4))
         
         }
     }
@@ -4833,6 +4881,7 @@ public enum ReasonCode {
     case toolNotReady
     case platformNotSupported
     case capabilityUnavailable
+    case unknown
 }
 
 
@@ -4860,6 +4909,8 @@ public struct FfiConverterTypeReasonCode: FfiConverterRustBuffer {
         
         case 5: return .capabilityUnavailable
         
+        case 6: return .unknown
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -4886,6 +4937,10 @@ public struct FfiConverterTypeReasonCode: FfiConverterRustBuffer {
         
         case .capabilityUnavailable:
             writeInt(&buf, Int32(5))
+        
+        
+        case .unknown:
+            writeInt(&buf, Int32(6))
         
         }
     }

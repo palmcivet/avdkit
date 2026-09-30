@@ -114,12 +114,12 @@ fn unrecognized(output: &Output, message: &str) -> Error {
 
 fn error_with_diagnostic(output: &Output, code: ErrorCode, message: &str) -> Error {
     let mut error = Error::new(code, message);
-    error.diagnostic = Some(Diagnostic {
+    error.diagnostic = Some(Box::new(Diagnostic {
         command: None,
         stdout: Some(output.stdout.clone()),
         stderr: Some(output.stderr.clone()),
         exit_status: output.status,
-    });
+    }));
     error
 }
 

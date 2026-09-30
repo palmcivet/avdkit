@@ -19,6 +19,7 @@ pub struct CompensationResult {
 /// Stable machine-readable category for an operation failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ErrorCode {
     /// A required executable was not found.
     ToolNotFound,
@@ -104,8 +105,8 @@ pub struct Error {
     pub failed_step: Option<String>,
     /// Compensations attempted after the original plan failure.
     pub compensations: Vec<CompensationResult>,
-    /// Optional low-level troubleshooting context.
-    pub diagnostic: Option<Diagnostic>,
+    /// Optional low-level troubleshooting context, boxed because it is rare and large.
+    pub diagnostic: Option<Box<Diagnostic>>,
 }
 
 impl Error {
@@ -173,6 +174,11 @@ pub enum ModelError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_stays_small_enough_to_return_by_value() {
+        assert!(std::mem::size_of::<Error>() <= 128);
+    }
 
     #[test]
     fn error_codes_serialize_as_snake_case() {

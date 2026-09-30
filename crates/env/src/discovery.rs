@@ -285,19 +285,15 @@ fn select_sdk_root(
             "caller sdk_root".to_owned(),
         ));
     }
-    if let Some(value) = environment.get("ANDROID_SDK_ROOT") {
-        candidates.push((
-            PathBuf::from(value),
-            value_source(environment_values, "ANDROID_SDK_ROOT"),
-            "ANDROID_SDK_ROOT".to_owned(),
-        ));
-    }
-    if let Some(value) = environment.get("ANDROID_HOME") {
-        candidates.push((
-            PathBuf::from(value),
-            value_source(environment_values, "ANDROID_HOME"),
-            "ANDROID_HOME".to_owned(),
-        ));
+    // `ANDROID_SDK_ROOT` is deprecated in favor of `ANDROID_HOME`.
+    for name in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+        if let Some(value) = environment.get(name) {
+            candidates.push((
+                PathBuf::from(value),
+                value_source(environment_values, name),
+                name.to_owned(),
+            ));
+        }
     }
     if let Some(path) = android_cli {
         candidates.push((path, ValueSource::AndroidCli, "android info sdk".into()));
@@ -378,7 +374,7 @@ fn unavailable_android_tool(path: PathBuf, error: Error) -> ToolStatus {
         source: Some(ToolSource::SearchPath),
         package: None,
         reasons: vec![reason],
-        diagnostic: error.diagnostic,
+        diagnostic: error.diagnostic.map(|diagnostic| *diagnostic),
     }
 }
 
@@ -723,7 +719,7 @@ fn error_diagnostic(message: &str, error: Error) -> EnvironmentDiagnostic {
         stdout,
         stderr,
         exit_status,
-    }) = error.diagnostic
+    }) = error.diagnostic.map(|diagnostic| *diagnostic)
     {
         if let Some(command) = command {
             values.push(EnvironmentValue {
@@ -803,24 +799,25 @@ mod tests {
     #[test]
     fn sdk_root_precedence_and_conflicts_are_explicit() {
         let environment = BTreeMap::from([
-            ("ANDROID_SDK_ROOT".into(), "/environment/sdk".into()),
-            ("ANDROID_HOME".into(), "/legacy/sdk".into()),
+            ("ANDROID_HOME".into(), "/environment/sdk".into()),
+            ("ANDROID_SDK_ROOT".into(), "/deprecated/sdk".into()),
         ]);
+        let values = [
+            EnvironmentValue {
+                name: "ANDROID_HOME".into(),
+                value: "/environment/sdk".into(),
+                source: ValueSource::LoginShell,
+            },
+            EnvironmentValue {
+                name: "ANDROID_SDK_ROOT".into(),
+                value: "/deprecated/sdk".into(),
+                source: ValueSource::ProcessEnvironment,
+            },
+        ];
         let selection = select_sdk_root(
             Some(PathBuf::from("/caller/sdk")),
             &environment,
-            &[
-                EnvironmentValue {
-                    name: "ANDROID_SDK_ROOT".into(),
-                    value: "/environment/sdk".into(),
-                    source: ValueSource::ProcessEnvironment,
-                },
-                EnvironmentValue {
-                    name: "ANDROID_HOME".into(),
-                    value: "/legacy/sdk".into(),
-                    source: ValueSource::LoginShell,
-                },
-            ],
+            &values,
             Some(PathBuf::from("/android/sdk")),
             PathBuf::from("/default/sdk"),
         );
@@ -828,6 +825,16 @@ mod tests {
         assert_eq!(selection.source, ValueSource::CallerOverride);
         assert_eq!(selection.diagnostics.len(), 1);
         assert_eq!(selection.diagnostics[0].values.len(), 5);
+
+        let selection = select_sdk_root(
+            None,
+            &environment,
+            &values,
+            None,
+            PathBuf::from("/default/sdk"),
+        );
+        assert_eq!(selection.path, PathBuf::from("/environment/sdk"));
+        assert_eq!(selection.source, ValueSource::LoginShell);
     }
 
     #[test]

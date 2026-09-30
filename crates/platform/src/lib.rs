@@ -11,12 +11,23 @@ use std::{
     process::{Command, Stdio},
 };
 
-use model::{CpuArchitecture, Description, Field, Host, Platform, PlatformPaths, ToolNames};
+use model::{CpuArchitecture, Field, Host, Platform, PlatformPaths, ToolNames};
 
 pub use process::{
-    prepare_child, prepare_detached_child, process_exists, signal_process_group, ProcessGroup,
-    ProcessSignal,
+    prepare_child, prepare_detached_child, process_executable, process_exists,
+    signal_process_group, ProcessGroup, ProcessSignal,
 };
+
+/// Host-specific defaults consumed by environment discovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Description {
+    /// Host identity.
+    pub host: Host,
+    /// Default or environment-selected paths.
+    pub paths: PlatformPaths,
+    /// Executable names for the host.
+    pub tools: ToolNames,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoginShell {
@@ -46,8 +57,8 @@ pub fn describe() -> Description {
     let environment = process_environment();
     let mut description = describe_with_environment(&environment);
     if let Some(sdk_root) = environment
-        .get("ANDROID_SDK_ROOT")
-        .or_else(|| environment.get("ANDROID_HOME"))
+        .get("ANDROID_HOME")
+        .or_else(|| environment.get("ANDROID_SDK_ROOT"))
     {
         description.paths.sdk_root = PathBuf::from(sdk_root);
     }
@@ -99,7 +110,7 @@ fn current_host() -> Host {
     let android_abi = match architecture {
         CpuArchitecture::Arm64 => Field::present("arm64-v8a".into()),
         CpuArchitecture::X86_64 => Field::present("x86_64".into()),
-        CpuArchitecture::Other => Field::Unavailable,
+        _ => Field::Unavailable,
     };
     Host {
         supported: matches!(platform, Platform::MacOs)
@@ -144,7 +155,7 @@ fn default_sdk_root(
             .map(PathBuf::from)
             .unwrap_or_else(|| home.to_path_buf())
             .join("Android/Sdk"),
-        Platform::Unsupported => home.join("Android/Sdk"),
+        _ => home.join("Android/Sdk"),
     }
 }
 
@@ -166,7 +177,7 @@ fn runtime_root(
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join("AppData/Local/Temp"))
             .join("avd/running"),
-        Platform::Unsupported => home.join(".cache/avd/running"),
+        _ => home.join(".cache/avd/running"),
     }
 }
 
@@ -189,7 +200,7 @@ fn default_data_root(
             .map(PathBuf::from)
             .unwrap_or_else(|| home.to_path_buf())
             .join(model::PRODUCT_NAME),
-        Platform::Unsupported => home.join(".local/share").join(model::PRODUCT_NAME),
+        _ => home.join(".local/share").join(model::PRODUCT_NAME),
     }
 }
 

@@ -7,6 +7,7 @@ use crate::Field;
 /// Operating-system family detected at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Platform {
     /// Apple macOS.
     MacOs,
@@ -21,6 +22,7 @@ pub enum Platform {
 /// CPU architecture detected at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum CpuArchitecture {
     /// 64-bit Arm.
     Arm64,
@@ -61,7 +63,7 @@ pub struct PlatformPaths {
 /// Platform-specific names of official Android executables.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolNames {
-    /// Legacy Android CLI executable.
+    /// Android CLI executable (`android`).
     pub android: String,
     /// Android Debug Bridge executable.
     pub adb: String,
@@ -71,15 +73,4 @@ pub struct ToolNames {
     pub sdkmanager: String,
     /// AVD manager executable.
     pub avdmanager: String,
-}
-
-/// Host-specific defaults consumed by environment discovery.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Description {
-    /// Host identity.
-    pub host: Host,
-    /// Default or environment-selected paths.
-    pub paths: PlatformPaths,
-    /// Executable names for the host.
-    pub tools: ToolNames,
 }

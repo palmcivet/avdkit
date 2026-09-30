@@ -1,4 +1,4 @@
-use std::{io, process::Command};
+use std::{io, path::PathBuf, process::Command};
 
 /// Configures a child so its descendants can be terminated as one unit.
 pub fn prepare_child(command: &mut Command) {
@@ -6,8 +6,10 @@ pub fn prepare_child(command: &mut Command) {
 }
 
 /// Configures a long-lived child to run in a new session.
-pub fn prepare_detached_child(command: &mut Command) {
-    os::prepare_detached_child(command);
+///
+/// Returns [`io::ErrorKind::Unsupported`] where detaching is not implemented.
+pub fn prepare_detached_child(command: &mut Command) -> io::Result<()> {
+    os::prepare_detached_child(command)
 }
 
 /// Signal used when stopping a detached emulator process group.
@@ -20,8 +22,16 @@ pub enum ProcessSignal {
 }
 
 /// Returns whether a process identifier still refers to a live process.
-pub fn process_exists(pid: u32) -> bool {
+///
+/// A live identifier may belong to an unrelated process after PID reuse; use
+/// [`process_executable`] before acting on a process by identifier alone.
+pub fn process_exists(pid: u32) -> io::Result<bool> {
     os::process_exists(pid)
+}
+
+/// Returns the executable image of a live process, or `None` when it has exited.
+pub fn process_executable(pid: u32) -> io::Result<Option<PathBuf>> {
+    os::process_executable(pid)
 }
 
 /// Sends a signal to the process group led by `pid`, falling back to the process.
@@ -72,13 +82,13 @@ impl Drop for ProcessGroup {
 #[cfg(unix)]
 mod os {
     use super::ProcessSignal;
-    use std::{io, os::unix::process::CommandExt, process::Command};
+    use std::{io, os::unix::process::CommandExt, path::PathBuf, process::Command};
 
     pub fn prepare_child(command: &mut Command) {
         command.process_group(0);
     }
 
-    pub fn prepare_detached_child(command: &mut Command) {
+    pub fn prepare_detached_child(command: &mut Command) -> io::Result<()> {
         unsafe {
             command.pre_exec(|| {
                 if libc::setsid() == -1 {
@@ -88,6 +98,7 @@ mod os {
                 }
             });
         }
+        Ok(())
     }
 
     pub fn group_id(pid: u32) -> Option<i32> {
@@ -101,12 +112,54 @@ mod os {
         }
     }
 
-    pub fn process_exists(pid: u32) -> bool {
+    pub fn process_exists(pid: u32) -> io::Result<bool> {
         let Ok(pid) = i32::try_from(pid) else {
-            return false;
+            return Ok(false);
         };
-        let result = unsafe { libc::kill(pid, 0) };
-        result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+        if unsafe { libc::kill(pid, 0) } == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EPERM) => Ok(true),
+            Some(libc::ESRCH) => Ok(false),
+            _ => Err(error),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn process_executable(pid: u32) -> io::Result<Option<PathBuf>> {
+        use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
+        let Ok(pid) = i32::try_from(pid) else {
+            return Ok(None);
+        };
+        let mut buffer = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        let length =
+            unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+        if length <= 0 {
+            let error = io::Error::last_os_error();
+            return match error.raw_os_error() {
+                Some(libc::ESRCH) => Ok(None),
+                _ => Err(error),
+            };
+        }
+        buffer.truncate(length as usize);
+        Ok(Some(PathBuf::from(OsStr::from_bytes(&buffer))))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn process_executable(pid: u32) -> io::Result<Option<PathBuf>> {
+        match std::fs::read_link(format!("/proc/{pid}/exe")) {
+            Ok(path) => Ok(Some(path)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    pub fn process_executable(_pid: u32) -> io::Result<Option<PathBuf>> {
+        Err(io::ErrorKind::Unsupported.into())
     }
 
     pub fn signal_process_group(pid: u32, signal_kind: ProcessSignal) -> io::Result<()> {
@@ -135,11 +188,15 @@ mod os {
 #[cfg(not(unix))]
 mod os {
     use super::ProcessSignal;
-    use std::{io, process::Command};
+    use std::{io, path::PathBuf, process::Command};
 
+    // Short-lived commands still terminate through `kill_on_drop`; only their
+    // descendants are not grouped on this platform.
     pub fn prepare_child(_command: &mut Command) {}
 
-    pub fn prepare_detached_child(_command: &mut Command) {}
+    pub fn prepare_detached_child(_command: &mut Command) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
 
     pub fn group_id(_pid: u32) -> Option<i32> {
         None
@@ -149,12 +206,16 @@ mod os {
         Ok(())
     }
 
-    pub fn process_exists(_pid: u32) -> bool {
-        false
+    pub fn process_exists(_pid: u32) -> io::Result<bool> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    pub fn process_executable(_pid: u32) -> io::Result<Option<PathBuf>> {
+        Err(io::ErrorKind::Unsupported.into())
     }
 
     pub fn signal_process_group(_pid: u32, _signal: ProcessSignal) -> io::Result<()> {
-        Ok(())
+        Err(io::ErrorKind::Unsupported.into())
     }
 }
 
@@ -232,12 +293,27 @@ mod tests {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        prepare_detached_child(&mut command);
+        prepare_detached_child(&mut command).unwrap();
 
         let mut child = command.spawn().unwrap();
         let pid = i32::try_from(child.id()).unwrap();
         assert_eq!(unsafe { libc::getsid(pid) }, pid);
         signal_process_group(child.id(), ProcessSignal::Kill).unwrap();
         child.wait().unwrap();
+    }
+
+    #[test]
+    fn reports_the_executable_of_a_live_process_and_none_after_exit() {
+        let mut child = Command::new("/bin/sleep")
+            .arg("120")
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        let executable = process_executable(child.id()).unwrap().unwrap();
+        assert_eq!(executable.file_name().unwrap(), "sleep");
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(process_executable(child.id()).unwrap(), None);
+        assert!(!super::process_exists(child.id()).unwrap());
     }
 }

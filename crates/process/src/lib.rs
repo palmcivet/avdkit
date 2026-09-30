@@ -1,7 +1,5 @@
 //! Process execution primitives shared by tool drivers.
 
-#![allow(clippy::result_large_err)]
-
 use std::{
     collections::BTreeMap,
     fs::OpenOptions,
@@ -129,7 +127,7 @@ impl Runner {
             .stdout(stdout)
             .stderr(stderr)
             .kill_on_drop(false);
-        platform::prepare_detached_child(command.as_std_mut());
+        platform::prepare_detached_child(command.as_std_mut()).map_err(platform_error)?;
         if let Some(current_dir) = &spec.current_dir {
             command.current_dir(current_dir);
         }
@@ -242,6 +240,16 @@ impl Runner {
 fn spawn_error(error: std::io::Error) -> Error {
     let code = if error.kind() == std::io::ErrorKind::NotFound {
         ErrorCode::ToolNotFound
+    } else {
+        ErrorCode::Internal
+    };
+    Error::new(code, error.to_string())
+}
+
+/// Maps a platform primitive failure, keeping unsupported platforms distinguishable.
+pub fn platform_error(error: std::io::Error) -> Error {
+    let code = if error.kind() == std::io::ErrorKind::Unsupported {
+        ErrorCode::PlatformNotSupported
     } else {
         ErrorCode::Internal
     };

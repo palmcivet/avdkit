@@ -22,7 +22,7 @@ pub enum ValueSource {
     ProcessEnvironment,
     /// Environment loaded from the platform login shell.
     LoginShell,
-    /// Value reported by the legacy Android CLI.
+    /// Value reported by the Android CLI (`android`).
     AndroidCli,
     /// Platform-specific fallback.
     PlatformDefault,
@@ -89,6 +89,7 @@ pub struct ToolStatus {
 /// Category of a non-fatal environment probe diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum EnvironmentDiagnosticCode {
     /// Multiple sources supplied different values.
     SourceConflict,

@@ -23,6 +23,7 @@ pub struct CreateDeviceDraft {
 /// High-level operation represented by a plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum PlanKind {
     /// Create a configured virtual device.
     CreateDevice,
@@ -31,6 +32,7 @@ pub enum PlanKind {
 /// Serializable domain input retained so an approved plan can be executed later.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum PlanIntent {
     /// Create a configured virtual device.
     CreateDevice {
@@ -42,6 +44,7 @@ pub enum PlanIntent {
 /// Execution mechanism used by a plan step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum PlanStepKind {
     /// Invoke an official command-line tool.
     ToolCall,
@@ -87,6 +90,7 @@ pub struct Plan {
 /// Successful final value of a long-running operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum OperationResult {
     /// An SDK package was installed.
     PackageInstalled {

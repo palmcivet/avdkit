@@ -1,8 +1,12 @@
 //! Public Rust facade.
+//!
+//! Methods that return an [`Operation`] start work on the ambient Tokio runtime
+//! and must be called from within one; otherwise the operation completes
+//! immediately with an `internal` error.
 
-#![allow(clippy::result_large_err)]
 #![deny(missing_docs)]
 
+mod backend;
 mod executor;
 mod operation;
 mod planner;
@@ -14,14 +18,14 @@ use std::sync::{Arc, RwLock};
 pub use model::{
     environment_prefix, test_avd_prefix, AndroidCliMetrics, AvdId, BootStatus, Capability,
     CapabilityId, CapabilityMatrix, CapabilityState, Compensation, CompensationResult,
-    CpuArchitecture, CreateDeviceDraft, Description, Device, Diagnostic, Envelope,
-    EnvironmentDiagnostic, EnvironmentDiagnosticCode, EnvironmentReport, EnvironmentSnapshot,
-    EnvironmentValue, Error, ErrorCode, Event, Field, HardwareConfig, Host, KitConfig,
-    LicenseAcceptance, LogStream, ModelError, OperationResult, Package, PackageId, PackageKind,
-    Plan, PlanIntent, PlanKind, PlanStep, PlanStepKind, Platform, PlatformPaths, Policy, Profile,
-    ProfileId, Reason, ReasonCode, Remedy, RemedyKind, Revision, RunningInstance, Serial,
-    StartOptions, Timeouts, ToolNames, ToolPreference, ToolSource, ToolState, ToolStatus,
-    ValueSource, PRODUCT_NAME, SCHEMA_VERSION,
+    CpuArchitecture, CreateDeviceDraft, Device, Diagnostic, Envelope, EnvironmentDiagnostic,
+    EnvironmentDiagnosticCode, EnvironmentReport, EnvironmentSnapshot, EnvironmentValue, Error,
+    ErrorCode, Event, Field, HardwareConfig, Host, KitConfig, LicenseAcceptance, LogStream,
+    ModelError, OperationResult, Package, PackageId, PackageKind, Plan, PlanIntent, PlanKind,
+    PlanStep, PlanStepKind, Platform, PlatformPaths, Policy, Profile, ProfileId, Reason,
+    ReasonCode, Remedy, RemedyKind, Revision, RunningInstance, Serial, StartOptions, Timeouts,
+    ToolNames, ToolPreference, ToolSource, ToolState, ToolStatus, ValueSource, PRODUCT_NAME,
+    SCHEMA_VERSION,
 };
 pub use operation::Operation;
 use routing::{Implementation, Router};
@@ -156,7 +160,7 @@ impl Kit {
         .map_err(blocking_task_error)?
     }
 
-    /// Queries the legacy Android CLI for its preset device profiles.
+    /// Queries the Android CLI for its preset device profiles.
     pub async fn profiles(&self) -> Result<Vec<Profile>, Error> {
         self.require_capability(CapabilityId::DevicesProfiles)?;
         let report = self.read_report()?;
@@ -187,27 +191,28 @@ impl Kit {
     }
 
     /// Compiles a serializable plan for creating an AVD.
+    ///
+    /// Compilation has no side effects and does not depend on installed tools;
+    /// [`Kit::execute_plan`] checks the `devices_plan_create` capability.
     pub fn plan_create(&self, draft: CreateDeviceDraft) -> Result<Plan, Error> {
         if !draft.hardware.is_default() {
             return Err(Error::not_implemented("custom hardware"));
         }
-        self.require_capability(CapabilityId::DevicesPlanCreate)?;
-        debug_assert_eq!(
-            Router.plan_tool(PlanKind::CreateDevice),
-            Implementation::AndroidCli
-        );
         Ok(planner::compile_create(&draft))
     }
 
     /// Starts execution of a previously compiled plan.
+    ///
+    /// The plan's intent is recompiled and its step structure must match;
+    /// step descriptions are presentation only and are not compared.
     pub fn execute_plan(&self, plan: Plan) -> Operation {
-        if let Err(error) = self.require_capability(CapabilityId::DevicesPlanCreate) {
-            return Operation::failed(error);
-        }
         let draft = match planner::create_draft(&plan) {
             Ok(draft) => draft,
             Err(error) => return Operation::failed(error),
         };
+        if let Err(error) = self.require_capability(CapabilityId::DevicesPlanCreate) {
+            return Operation::failed(error);
+        }
         let snapshot = match self.read_report() {
             Ok(report) => report.snapshot,
             Err(error) => return Operation::failed(error),
@@ -461,7 +466,7 @@ mod tests {
     async fn execute_plan_rejects_a_plan_changed_after_compilation() {
         let kit = kit();
         let mut plan = kit.plan_create(draft()).unwrap();
-        plan.steps[0].description = "different action".into();
+        plan.steps.remove(1);
         let operation = kit.execute_plan(plan);
         let error = operation.result().await.unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidInput);
@@ -499,8 +504,6 @@ mod tests {
     #[tokio::test]
     async fn unavailable_operation_completes() {
         let operation = kit().install(draft().image);
-        let event = operation.next_event().await;
-        assert!(matches!(event, Some(Event::Warning { .. })));
         assert!(operation.next_event().await.is_none());
         let error = operation.result().await.unwrap_err();
         assert_eq!(error.code, ErrorCode::CapabilityUnavailable);

@@ -158,6 +158,7 @@ impl PackageId {
 /// Category of an Android SDK package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum PackageKind {
     /// Emulator guest system image.
     SystemImage,
@@ -191,12 +192,27 @@ impl PackageKind {
 }
 
 /// Comparable dotted revision with an optional suffix.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Revision {
     /// Numeric dotted components with insignificant trailing zeroes removed.
     pub components: Vec<u64>,
-    /// Optional text following the first hyphen.
+    /// Optional non-empty text following the first hyphen.
     pub suffix: Option<String>,
+}
+
+impl Revision {
+    fn normalized(mut components: Vec<u64>, suffix: Option<String>) -> Option<Self> {
+        while components.last() == Some(&0) && components.len() > 1 {
+            components.pop();
+        }
+        if components.is_empty() {
+            return None;
+        }
+        Some(Self {
+            components,
+            suffix: suffix.filter(|value| !value.is_empty()),
+        })
+    }
 }
 
 impl FromStr for Revision {
@@ -206,7 +222,7 @@ impl FromStr for Revision {
         let (numbers, suffix) = value
             .split_once('-')
             .map_or((value, None), |(a, b)| (a, Some(b)));
-        let mut components = numbers
+        let components = numbers
             .split('.')
             .map(|component| {
                 component
@@ -214,16 +230,25 @@ impl FromStr for Revision {
                     .map_err(|_| ModelError::InvalidRevision(value.into()))
             })
             .collect::<Result<Vec<u64>, _>>()?;
-        while components.last() == Some(&0) && components.len() > 1 {
-            components.pop();
+        Self::normalized(components, suffix.map(str::to_owned))
+            .ok_or_else(|| ModelError::InvalidRevision(value.into()))
+    }
+}
+
+impl<'de> Deserialize<'de> for Revision {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            components: Vec<u64>,
+            suffix: Option<String>,
         }
-        if components.is_empty() {
-            return Err(ModelError::InvalidRevision(value.into()));
-        }
-        Ok(Self {
-            components,
-            suffix: suffix.filter(|value| !value.is_empty()).map(str::to_owned),
-        })
+
+        let raw = Raw::deserialize(deserializer)?;
+        Self::normalized(raw.components, raw.suffix)
+            .ok_or_else(|| serde::de::Error::custom("revision must have a numeric component"))
     }
 }
 
@@ -246,10 +271,7 @@ impl Ord for Revision {
                 ordering => return ordering,
             }
         }
-        match (self.suffix.as_deref(), other.suffix.as_deref()) {
-            (None | Some(""), None | Some("")) => Ordering::Equal,
-            (left, right) => left.cmp(&right),
-        }
+        self.suffix.cmp(&other.suffix)
     }
 }
 
@@ -298,5 +320,14 @@ mod tests {
 
         let id = serde_json::from_str::<AvdId>(r#""phone""#).unwrap();
         assert_eq!(id.as_str(), "phone");
+    }
+
+    #[test]
+    fn revision_deserialization_normalizes_like_parsing() {
+        let revision =
+            serde_json::from_str::<Revision>(r#"{"components":[37,1,0],"suffix":""}"#).unwrap();
+        assert_eq!(revision.components, [37, 1]);
+        assert_eq!(revision.suffix, None);
+        assert!(serde_json::from_str::<Revision>(r#"{"components":[],"suffix":null}"#).is_err());
     }
 }

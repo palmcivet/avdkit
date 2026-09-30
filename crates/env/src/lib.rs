@@ -1,7 +1,5 @@
 //! Environment discovery and SDK metadata inspection.
 
-#![allow(clippy::result_large_err)]
-
 use std::{
     fs,
     path::{Component, Path},

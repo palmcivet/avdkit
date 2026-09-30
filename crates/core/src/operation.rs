@@ -8,6 +8,9 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 static NEXT_OPERATION: AtomicU64 = AtomicU64::new(1);
 
 /// Handle for consuming events, cancelling work, and obtaining one final result.
+///
+/// Work continues if the handle is dropped; call [`Operation::cancel`] to stop it.
+/// An operation rejected before it starts emits no events and completes with its error.
 #[derive(Debug)]
 pub struct Operation {
     /// Process-local operation identifier.
@@ -27,9 +30,6 @@ impl Operation {
         let (event_tx, events) = mpsc::unbounded_channel();
         let (result_tx, result) = oneshot::channel();
         let cancellation = CancellationToken::new();
-        let _ = event_tx.send(Event::Warning {
-            message: error.message.clone(),
-        });
         drop(event_tx);
         let _ = result_tx.send(Err(error));
         Self {

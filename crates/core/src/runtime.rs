@@ -1,18 +1,13 @@
-use std::{
-    fs,
-    future::Future,
-    path::{Path, PathBuf},
-    pin::Pin,
-    sync::Arc,
-    time::Duration,
-};
+use std::{fs, path::Path, sync::Arc, time::Duration};
 
 use model::{
     AvdId, BootStatus, Diagnostic, EnvironmentSnapshot, Error, ErrorCode, Event, Field,
-    OperationResult, RunningInstance, Serial, ToolState,
+    OperationResult, RunningInstance, Serial,
 };
-use process::{CancellationToken, CommandSpec, Runner};
+use process::CancellationToken;
 use tokio::{sync::mpsc, time::Instant};
+
+use crate::backend::{blocking, tool_path, Backend, RealBackend};
 
 const ADB_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -40,84 +35,6 @@ const PRESET_TIMEOUTS: LifecycleTimeouts = LifecycleTimeouts {
     signal: SIGNAL_TIMEOUT,
     poll: POLL_INTERVAL,
 };
-
-trait ChildProcess: Send {
-    fn id(&self) -> u32;
-    fn try_exit(&mut self) -> Result<Option<Option<i32>>, Error>;
-}
-
-trait Backend: Send + Sync {
-    fn execute<'a>(
-        &'a self,
-        invocation: drivers::Invocation,
-        cancellation: &'a CancellationToken,
-        timeout: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<process::Output, Error>> + Send + 'a>>;
-
-    fn spawn_detached(
-        &self,
-        spec: CommandSpec,
-        stdout_path: &Path,
-        stderr_path: &Path,
-        cancellation: &CancellationToken,
-    ) -> Result<Box<dyn ChildProcess>, Error>;
-
-    fn process_exists(&self, pid: u32) -> bool;
-
-    fn signal(&self, pid: u32, signal: platform::ProcessSignal) -> Result<(), Error>;
-}
-
-struct RealBackend {
-    runner: Runner,
-}
-
-struct RealChild(process::DetachedProcess);
-
-impl ChildProcess for RealChild {
-    fn id(&self) -> u32 {
-        self.0.id()
-    }
-
-    fn try_exit(&mut self) -> Result<Option<Option<i32>>, Error> {
-        self.0.try_wait()
-    }
-}
-
-impl Backend for RealBackend {
-    fn execute<'a>(
-        &'a self,
-        invocation: drivers::Invocation,
-        cancellation: &'a CancellationToken,
-        timeout: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<process::Output, Error>> + Send + 'a>> {
-        Box::pin(self.runner.run_cancellable_with_timeout(
-            invocation.command(),
-            timeout,
-            cancellation,
-        ))
-    }
-
-    fn spawn_detached(
-        &self,
-        spec: CommandSpec,
-        stdout_path: &Path,
-        stderr_path: &Path,
-        cancellation: &CancellationToken,
-    ) -> Result<Box<dyn ChildProcess>, Error> {
-        self.runner
-            .spawn_detached(spec, stdout_path, stderr_path, cancellation)
-            .map(|process| Box::new(RealChild(process)) as Box<dyn ChildProcess>)
-    }
-
-    fn process_exists(&self, pid: u32) -> bool {
-        platform::process_exists(pid)
-    }
-
-    fn signal(&self, pid: u32, signal: platform::ProcessSignal) -> Result<(), Error> {
-        platform::signal_process_group(pid, signal)
-            .map_err(|error| Error::new(ErrorCode::Internal, error.to_string()))
-    }
-}
 
 #[derive(Debug, Clone)]
 struct DiscoveryRecord {
@@ -168,10 +85,7 @@ impl Drop for StartedProcessGuard {
 
 pub(crate) async fn running(snapshot: &EnvironmentSnapshot) -> Result<Vec<RunningInstance>, Error> {
     let cancellation = CancellationToken::new();
-    let backend = RealBackend {
-        runner: Runner::default(),
-    };
-    discover(&backend, snapshot, &cancellation)
+    discover(&RealBackend::new(), snapshot, &cancellation)
         .await
         .map(|instances| {
             instances
@@ -186,10 +100,7 @@ pub(crate) async fn boot_status(
     id: &AvdId,
 ) -> Result<BootStatus, Error> {
     let cancellation = CancellationToken::new();
-    let backend = RealBackend {
-        runner: Runner::default(),
-    };
-    boot_status_with_backend(&backend, snapshot, id, &cancellation).await
+    boot_status_with_backend(&RealBackend::new(), snapshot, id, &cancellation).await
 }
 
 pub(crate) async fn start(
@@ -203,9 +114,7 @@ pub(crate) async fn start(
         snapshot,
         events,
         cancellation,
-        Arc::new(RealBackend {
-            runner: Runner::default(),
-        }),
+        Arc::new(RealBackend::new()),
         PRESET_TIMEOUTS,
     )
     .await
@@ -225,12 +134,22 @@ pub(crate) async fn stop(
         StopStrategy { use_adb, metrics },
         events,
         cancellation,
-        Arc::new(RealBackend {
-            runner: Runner::default(),
-        }),
+        Arc::new(RealBackend::new()),
         PRESET_TIMEOUTS,
     )
     .await
+}
+
+pub(crate) async fn is_running(
+    backend: &dyn Backend,
+    snapshot: &EnvironmentSnapshot,
+    id: &AvdId,
+    cancellation: &CancellationToken,
+) -> Result<bool, Error> {
+    Ok(discover(backend, snapshot, cancellation)
+        .await?
+        .iter()
+        .any(|instance| &instance.public.id == id))
 }
 
 async fn discover(
@@ -439,14 +358,16 @@ async fn start_with_backend(
     backend: Arc<dyn Backend>,
     timeouts: LifecycleTimeouts,
 ) -> Result<OperationResult, Error> {
-    if let Some(instance) = discover(backend.as_ref(), &snapshot, &cancellation)
-        .await?
-        .into_iter()
-        .find(|instance| instance.public.id == id)
-    {
-        return Ok(OperationResult::DeviceStarted {
-            instance: instance.public,
-        });
+    if is_running(backend.as_ref(), &snapshot, &id, &cancellation).await? {
+        return wait_for_running_instance(
+            backend.as_ref(),
+            &snapshot,
+            &id,
+            &events,
+            &cancellation,
+            timeouts,
+        )
+        .await;
     }
     let avd_root = snapshot.paths.avd_root.clone();
     let user_root = snapshot.paths.user_root.clone();
@@ -547,6 +468,52 @@ async fn start_with_backend(
         }
 
         if adb_finished && started.elapsed() >= timeouts.boot {
+            return Err(Error::new(
+                ErrorCode::Timeout,
+                "timed out waiting for Android to boot",
+            ));
+        }
+        tokio::time::sleep(timeouts.poll).await;
+    }
+}
+
+async fn wait_for_running_instance(
+    backend: &dyn Backend,
+    snapshot: &EnvironmentSnapshot,
+    id: &AvdId,
+    events: &mpsc::UnboundedSender<Event>,
+    cancellation: &CancellationToken,
+    timeouts: LifecycleTimeouts,
+) -> Result<OperationResult, Error> {
+    send_started(
+        events,
+        "wait_boot",
+        "wait for the running emulator to become ready",
+    );
+    let deadline = Instant::now() + timeouts.boot;
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(Error::new(ErrorCode::Cancelled, "emulator start cancelled"));
+        }
+        let Some(instance) = discover(backend, snapshot, cancellation)
+            .await?
+            .into_iter()
+            .find(|instance| &instance.public.id == id)
+        else {
+            return Err(Error::new(
+                ErrorCode::LaunchFailed,
+                format!("emulator for {id} stopped before Android was ready"),
+            ));
+        };
+        if instance.state == "device"
+            && readiness(backend, snapshot, &instance.public, cancellation).await?
+        {
+            send_finished(events, "wait_boot", "Android is ready");
+            return Ok(OperationResult::DeviceStarted {
+                instance: instance.public,
+            });
+        }
+        if Instant::now() >= deadline {
             return Err(Error::new(
                 ErrorCode::Timeout,
                 "timed out waiting for Android to boot",
@@ -723,9 +690,7 @@ async fn wait_then_force(
     let _ = events.send(Event::Warning {
         message: "graceful stop timed out; forcing the emulator may damage snapshots".into(),
     });
-    for pid in pids {
-        backend.signal(*pid, platform::ProcessSignal::Terminate)?;
-    }
+    signal_emulators(backend, snapshot, pids, platform::ProcessSignal::Terminate)?;
     if wait_stopped(
         backend,
         snapshot,
@@ -740,9 +705,7 @@ async fn wait_then_force(
         send_finished(events, "wait_stop", "emulator terminated");
         return Ok(());
     }
-    for pid in pids {
-        backend.signal(*pid, platform::ProcessSignal::Kill)?;
-    }
+    signal_emulators(backend, snapshot, pids, platform::ProcessSignal::Kill)?;
     if wait_stopped(
         backend,
         snapshot,
@@ -764,6 +727,38 @@ async fn wait_then_force(
     }
 }
 
+fn signal_emulators(
+    backend: &dyn Backend,
+    snapshot: &EnvironmentSnapshot,
+    pids: &[u32],
+    signal: platform::ProcessSignal,
+) -> Result<(), Error> {
+    for pid in pids {
+        if is_emulator_process(backend, snapshot, *pid)? {
+            backend.signal(*pid, signal)?;
+        }
+    }
+    Ok(())
+}
+
+/// Guards against PID reuse: a discovery file can outlive its emulator, and its
+/// PID may later belong to an unrelated process.
+fn is_emulator_process(
+    backend: &dyn Backend,
+    snapshot: &EnvironmentSnapshot,
+    pid: u32,
+) -> Result<bool, Error> {
+    let Some(executable) = backend.process_executable(pid)? else {
+        return Ok(false);
+    };
+    Ok(executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name == snapshot.tool_names.emulator || name.starts_with("qemu-system-")
+        }))
+}
+
 async fn wait_stopped(
     backend: &dyn Backend,
     snapshot: &EnvironmentSnapshot,
@@ -778,7 +773,13 @@ async fn wait_stopped(
         if cancellation.is_cancelled() {
             return Err(Error::new(ErrorCode::Cancelled, "emulator stop cancelled"));
         }
-        let processes_stopped = pids.iter().all(|pid| !backend.process_exists(*pid));
+        let mut processes_stopped = true;
+        for pid in pids {
+            if is_emulator_process(backend, snapshot, *pid)? {
+                processes_stopped = false;
+                break;
+            }
+        }
         let serials_stopped = if serials.is_empty() {
             true
         } else {
@@ -813,10 +814,13 @@ async fn discovery_records(
 ) -> Result<Vec<DiscoveryRecord>, Error> {
     let root = snapshot.paths.runtime_root.clone();
     let records = blocking(move || read_discovery_records(&root)).await?;
-    Ok(records
-        .into_iter()
-        .filter(|record| backend.process_exists(record.pid))
-        .collect())
+    let mut live = Vec::with_capacity(records.len());
+    for record in records {
+        if is_emulator_process(backend, snapshot, record.pid)? {
+            live.push(record);
+        }
+    }
+    Ok(live)
 }
 
 fn read_discovery_records(root: &Path) -> Result<Vec<DiscoveryRecord>, Error> {
@@ -873,26 +877,17 @@ fn field_serial_value(field: &Field<Serial>) -> Option<&str> {
     field.as_value().map(Serial::as_str)
 }
 
-fn tool_path(snapshot: &EnvironmentSnapshot, name: &str) -> Result<PathBuf, Error> {
-    snapshot
-        .tools
-        .iter()
-        .find(|tool| tool.name == name && tool.state == ToolState::Available)
-        .and_then(|tool| tool.path.clone())
-        .ok_or_else(|| Error::new(ErrorCode::ToolNotFound, format!("{name} was not found")))
-}
-
 fn launch_error(id: &AvdId, status: Option<i32>, stdout_path: &Path, stderr_path: &Path) -> Error {
     let mut error = Error::new(
         ErrorCode::LaunchFailed,
         format!("emulator for {id} exited before Android was ready"),
     );
-    error.diagnostic = Some(Diagnostic {
+    error.diagnostic = Some(Box::new(Diagnostic {
         command: Some(format!("emulator -avd {id}")),
         stdout: fs::read_to_string(stdout_path).ok(),
         stderr: fs::read_to_string(stderr_path).ok(),
         exit_status: status,
-    });
+    }));
     error
 }
 
@@ -910,19 +905,6 @@ fn send_finished(events: &mpsc::UnboundedSender<Event>, step: &str, message: imp
     });
 }
 
-async fn blocking<T, F>(work: F) -> Result<T, Error>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, Error> + Send + 'static,
-{
-    tokio::task::spawn_blocking(work).await.map_err(|error| {
-        Error::new(
-            ErrorCode::Internal,
-            format!("blocking task failed: {error}"),
-        )
-    })?
-}
-
 fn io_error(path: &Path, error: std::io::Error) -> Error {
     Error::new(
         ErrorCode::Internal,
@@ -936,16 +918,22 @@ fn io_error(path: &Path, error: std::io::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::{BoxFuture, ChildProcess};
     use model::{
         AndroidCliMetrics, CpuArchitecture, Host, Platform, PlatformPaths, ToolNames, ToolSource,
-        ToolStatus, ValueSource,
+        ToolState, ToolStatus, ValueSource,
     };
-    use std::sync::{
-        atomic::{AtomicU64, Ordering},
-        Mutex,
+    use process::CommandSpec;
+    use std::{
+        path::PathBuf,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Mutex,
+        },
     };
 
     static NEXT_ROOT: AtomicU64 = AtomicU64::new(1);
+    const UNRELATED_PID: u32 = 7777;
 
     #[derive(Default)]
     struct FakeState {
@@ -987,7 +975,7 @@ mod tests {
             invocation: drivers::Invocation,
             cancellation: &'a CancellationToken,
             _timeout: Duration,
-        ) -> Pin<Box<dyn Future<Output = Result<process::Output, Error>> + Send + 'a>> {
+        ) -> BoxFuture<'a, Result<process::Output, Error>> {
             Box::pin(async move {
                 if cancellation.is_cancelled() {
                     return Err(Error::new(ErrorCode::Cancelled, "cancelled"));
@@ -1064,8 +1052,17 @@ mod tests {
             }))
         }
 
-        fn process_exists(&self, pid: u32) -> bool {
-            pid == self.pid && self.state.lock().unwrap().alive
+        fn process_executable(&self, pid: u32) -> Result<Option<PathBuf>, Error> {
+            let state = self.state.lock().unwrap();
+            Ok(if pid == self.pid && state.alive {
+                Some(PathBuf::from(
+                    "/sdk/emulator/qemu/darwin-aarch64/qemu-system-aarch64",
+                ))
+            } else if pid == UNRELATED_PID {
+                Some(PathBuf::from("/usr/bin/unrelated"))
+            } else {
+                None
+            })
         }
 
         fn signal(&self, pid: u32, signal: platform::ProcessSignal) -> Result<(), Error> {
@@ -1433,6 +1430,99 @@ mod tests {
 
         assert_eq!(result, OperationResult::DeviceStopped { id });
         assert!(backend.state.lock().unwrap().signals.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_discovery_file_with_a_reused_pid_is_never_signalled() {
+        let root = temp_root("reused-pid");
+        let id = test_id("reused_pid");
+        let snapshot = snapshot(&root);
+        fs::create_dir_all(&snapshot.paths.runtime_root).unwrap();
+        fs::write(
+            snapshot
+                .paths
+                .runtime_root
+                .join(format!("pid_{UNRELATED_PID}.ini")),
+            format!("avd.id={id}\nport.serial=5554\n"),
+        )
+        .unwrap();
+        let backend = backend(&root, &id, FakeState::default());
+
+        let instances = discover(backend.as_ref(), &snapshot, &CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(instances.is_empty());
+
+        let (events, _receiver) = mpsc::unbounded_channel();
+        let result = stop_with_backend(
+            id.clone(),
+            snapshot,
+            StopStrategy {
+                use_adb: true,
+                metrics: AndroidCliMetrics::Inherit,
+            },
+            events,
+            CancellationToken::new(),
+            backend.clone(),
+            fast_timeouts(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result, OperationResult::DeviceStopped { id });
+        assert!(backend.state.lock().unwrap().signals.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn starting_a_running_instance_waits_for_readiness_without_relaunching() {
+        let root = temp_root("already-running");
+        let id = test_id("already_running");
+        let snapshot = snapshot(&root);
+        fs::create_dir_all(&snapshot.paths.runtime_root).unwrap();
+        fs::write(
+            snapshot.paths.runtime_root.join("pid_4242.ini"),
+            format!("avd.id={id}\nport.serial=5554\n"),
+        )
+        .unwrap();
+        let booting = backend(
+            &root,
+            &id,
+            FakeState {
+                alive: true,
+                serial_visible: true,
+                ..FakeState::default()
+            },
+        );
+        let (events, _receiver) = mpsc::unbounded_channel();
+        let error = start_with_backend(
+            id.clone(),
+            snapshot.clone(),
+            events,
+            CancellationToken::new(),
+            booting.clone(),
+            fast_timeouts(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Timeout);
+        assert_eq!(booting.state.lock().unwrap().spawn_count, 0);
+
+        booting.state.lock().unwrap().ready = true;
+        let (events, _receiver) = mpsc::unbounded_channel();
+        let result = start_with_backend(
+            id,
+            snapshot,
+            events,
+            CancellationToken::new(),
+            booting.clone(),
+            fast_timeouts(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, OperationResult::DeviceStarted { .. }));
+        assert_eq!(booting.state.lock().unwrap().spawn_count, 0);
         fs::remove_dir_all(root).unwrap();
     }
 }

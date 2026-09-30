@@ -43,6 +43,7 @@ pub struct RunningInstance {
 /// High-level boot state of an emulator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum BootStatus {
     /// No reachable instance is running.
     Offline,

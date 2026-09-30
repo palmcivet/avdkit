@@ -1,48 +1,21 @@
 use std::{
     collections::HashSet,
     fs::{self, OpenOptions},
-    future::Future,
-    hash::{DefaultHasher, Hash, Hasher},
     io::{self, Write},
     path::{Path, PathBuf},
-    pin::Pin,
     sync::{Arc, Mutex, OnceLock},
 };
 
 use model::{
-    CompensationResult, CreateDeviceDraft, EnvironmentSnapshot, Error, ErrorCode, Event, LogStream,
-    OperationResult, PackageKind, ToolState, PRODUCT_NAME,
+    AvdId, CompensationResult, CreateDeviceDraft, EnvironmentSnapshot, Error, ErrorCode, Event,
+    LogStream, OperationResult, PackageKind, PRODUCT_NAME,
 };
-use process::{CancellationToken, Runner};
+use process::CancellationToken;
 use tokio::sync::mpsc;
 
+use crate::backend::{blocking, tool_path, Backend, RealBackend, COMMAND_TIMEOUT};
+
 static ACTIVE_WRITES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-
-trait Backend: Send + Sync {
-    fn execute<'a>(
-        &'a self,
-        invocation: drivers::Invocation,
-        cancellation: &'a CancellationToken,
-    ) -> Pin<Box<dyn Future<Output = Result<process::Output, Error>> + Send + 'a>>;
-}
-
-struct RealBackend {
-    runner: Runner,
-}
-
-impl Backend for RealBackend {
-    fn execute<'a>(
-        &'a self,
-        invocation: drivers::Invocation,
-        cancellation: &'a CancellationToken,
-    ) -> Pin<Box<dyn Future<Output = Result<process::Output, Error>> + Send + 'a>> {
-        Box::pin(drivers::execute_cancellable(
-            &self.runner,
-            invocation,
-            cancellation,
-        ))
-    }
-}
 
 pub(crate) async fn execute_create(
     operation_id: String,
@@ -59,9 +32,7 @@ pub(crate) async fn execute_create(
         metrics,
         events,
         cancellation,
-        Arc::new(RealBackend {
-            runner: Runner::default(),
-        }),
+        Arc::new(RealBackend::new()),
     )
     .await
 }
@@ -79,9 +50,7 @@ pub(crate) async fn execute_delete(
         metrics,
         events,
         cancellation,
-        Arc::new(RealBackend {
-            runner: Runner::default(),
-        }),
+        Arc::new(RealBackend::new()),
     )
     .await
 }
@@ -94,7 +63,7 @@ async fn execute_delete_with_backend(
     cancellation: CancellationToken,
     backend: Arc<dyn Backend>,
 ) -> Result<OperationResult, Error> {
-    let _process_lock = ProcessWriteLock::acquire(vec![format!("name:{id}")])?;
+    let _process_lock = ProcessWriteLock::acquire(vec![id.to_string()])?;
     check_cancelled(&cancellation)?;
     require_android_cli_avd_layout(&snapshot)?;
     blocking({
@@ -107,11 +76,11 @@ async fn execute_delete_with_backend(
         }
     })
     .await?;
-    ensure_not_running(backend.as_ref(), &id, &snapshot, &events, &cancellation).await?;
+    ensure_not_running(backend.as_ref(), &id, &snapshot, &cancellation).await?;
 
     let directory_locks = blocking({
         let root = snapshot.paths.avd_root.clone();
-        let keys = vec![format!("name:{id}")];
+        let keys = vec![id.to_string()];
         move || DirectoryLocks::acquire(&root, &keys)
     })
     .await?;
@@ -135,6 +104,7 @@ async fn execute_delete_with_backend(
             )
             .with_environment(&environment),
             &cancellation,
+            COMMAND_TIMEOUT,
         )
         .await
         .map_err(|error| failed(error, "delete"))?;
@@ -175,7 +145,7 @@ async fn execute_create_with_backend(
 ) -> Result<OperationResult, Error> {
     let keys = lock_keys(&draft);
     let _process_lock = ProcessWriteLock::acquire(keys.clone())?;
-    preflight(backend.as_ref(), &draft, &snapshot, &events, &cancellation).await?;
+    preflight(backend.as_ref(), &draft, &snapshot, &cancellation).await?;
 
     check_cancelled(&cancellation)?;
     let directory_locks = blocking({
@@ -210,7 +180,10 @@ async fn execute_create_with_backend(
     let transaction = Arc::new(Mutex::new(None::<avdfs::CreateTransaction>));
     let result = async {
         start_step(&events, "create", "create an AVD from the selected profile");
-        let output = match backend.execute(invocation, &cancellation).await {
+        let output = match backend
+            .execute(invocation, &cancellation, COMMAND_TIMEOUT)
+            .await
+        {
             Ok(output) => output,
             Err(error) => {
                 created = matches!(error.code, ErrorCode::Cancelled | ErrorCode::Timeout);
@@ -308,7 +281,6 @@ async fn preflight(
     backend: &dyn Backend,
     draft: &CreateDeviceDraft,
     snapshot: &EnvironmentSnapshot,
-    events: &mpsc::UnboundedSender<Event>,
     cancellation: &CancellationToken,
 ) -> Result<(), Error> {
     validate_image(&draft.image)?;
@@ -347,7 +319,7 @@ async fn preflight(
     })
     .await?;
 
-    ensure_not_running(backend, &draft.id, snapshot, events, cancellation).await
+    ensure_not_running(backend, &draft.id, snapshot, cancellation).await
 }
 
 fn require_android_cli_avd_layout(snapshot: &EnvironmentSnapshot) -> Result<(), Error> {
@@ -363,66 +335,19 @@ fn require_android_cli_avd_layout(snapshot: &EnvironmentSnapshot) -> Result<(), 
 
 async fn ensure_not_running(
     backend: &dyn Backend,
-    id: &model::AvdId,
+    id: &AvdId,
     snapshot: &EnvironmentSnapshot,
-    events: &mpsc::UnboundedSender<Event>,
     cancellation: &CancellationToken,
 ) -> Result<(), Error> {
     check_cancelled(cancellation)?;
-    let adb = tool_path(snapshot, &snapshot.tool_names.adb)?;
-    let environment = drivers::ToolEnvironment::from(&snapshot.paths);
-    let output = backend
-        .execute(
-            drivers::Invocation::adb(adb.clone(), ["devices".into(), "-l".into()])
-                .with_environment(&environment),
-            cancellation,
-        )
-        .await?;
-    emit_output(events, &output);
-    for device in drivers::adb::parse_devices(&output)?
-        .into_iter()
-        .filter(|device| device.serial.starts_with("emulator-"))
-    {
-        if device.state != "device" {
-            return Err(Error::new(
-                ErrorCode::PreconditionFailed,
-                format!(
-                    "cannot determine the AVD name for {} in state {}",
-                    device.serial, device.state
-                ),
-            ));
-        }
-        let output = backend
-            .execute(
-                drivers::Invocation::adb(
-                    adb.clone(),
-                    [
-                        "-s".into(),
-                        device.serial,
-                        "shell".into(),
-                        "getprop".into(),
-                        "ro.boot.qemu.avd_name".into(),
-                    ],
-                )
-                .with_environment(&environment),
-                cancellation,
-            )
-            .await?;
-        emit_output(events, &output);
-        if output.status != Some(0) {
-            return Err(Error::new(
-                ErrorCode::PreconditionFailed,
-                "could not determine a running emulator's AVD identifier",
-            ));
-        }
-        if output.stdout.trim() == id.as_str() {
-            return Err(Error::new(
-                ErrorCode::DeviceRunning,
-                format!("Android virtual device {id} is running"),
-            ));
-        }
+    if crate::runtime::is_running(backend, snapshot, id, cancellation).await? {
+        Err(Error::new(
+            ErrorCode::DeviceRunning,
+            format!("Android virtual device {id} is running"),
+        ))
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
 fn validate_image(image: &model::PackageId) -> Result<(), Error> {
@@ -568,15 +493,6 @@ fn require_package(
     }
 }
 
-fn tool_path(snapshot: &EnvironmentSnapshot, name: &str) -> Result<PathBuf, Error> {
-    snapshot
-        .tools
-        .iter()
-        .find(|tool| tool.name == name && tool.state == ToolState::Available)
-        .and_then(|tool| tool.path.clone())
-        .ok_or_else(|| Error::new(ErrorCode::ToolNotFound, format!("{name} was not found")))
-}
-
 fn start_step(events: &mpsc::UnboundedSender<Event>, step: &str, message: &str) {
     let _ = events.send(Event::StepStarted {
         step: step.into(),
@@ -648,24 +564,8 @@ fn transaction_has_value(transaction: &Arc<Mutex<Option<avdfs::CreateTransaction
         .unwrap_or(true)
 }
 
-async fn blocking<T, F>(work: F) -> Result<T, Error>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, Error> + Send + 'static,
-{
-    tokio::task::spawn_blocking(work).await.map_err(|error| {
-        Error::new(
-            ErrorCode::Internal,
-            format!("blocking task failed: {error}"),
-        )
-    })?
-}
-
 fn lock_keys(draft: &CreateDeviceDraft) -> Vec<String> {
-    let mut keys = vec![
-        format!("name:{}", draft.id),
-        format!("name:{}", draft.profile),
-    ];
+    let mut keys = vec![draft.id.to_string(), draft.profile.to_string()];
     keys.sort();
     keys.dedup();
     keys
@@ -712,43 +612,62 @@ struct DirectoryLocks {
 impl DirectoryLocks {
     fn acquire(root: &Path, keys: &[String]) -> Result<Self, Error> {
         fs::create_dir_all(root).map_err(|error| io_error("create AVD directory", root, error))?;
-        let mut paths = Vec::new();
+        let mut locks = Self { paths: Vec::new() };
         for key in keys {
-            let mut hasher = DefaultHasher::new();
-            key.hash(&mut hasher);
-            let path = root.join(format!(
-                ".{PRODUCT_NAME}.write-lock-{:016x}",
-                hasher.finish()
-            ));
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(mut file) => {
-                    if let Err(error) = writeln!(file, "{}", std::process::id()) {
-                        for path in &paths {
-                            let _ = fs::remove_file(path);
-                        }
-                        return Err(io_error("write AVD directory lock", &path, error));
-                    }
-                    paths.push(path);
+            let path = lock_path(root, key);
+            acquire_lock_file(&path)?;
+            locks.paths.push(path);
+        }
+        Ok(locks)
+    }
+}
+
+// Lock names must be identical across builds and bindings, so they are derived
+// from the AVD identifier rather than from a hash with an unspecified algorithm.
+fn lock_path(root: &Path, key: &str) -> PathBuf {
+    root.join(format!(".{PRODUCT_NAME}-{key}.lock"))
+}
+
+fn acquire_lock_file(path: &Path) -> Result<(), Error> {
+    let held = || {
+        Error::new(
+            ErrorCode::PreconditionFailed,
+            format!("another write plan holds directory lock {}", path.display()),
+        )
+    };
+    for _ in 0..2 {
+        match OpenOptions::new().write(true).create_new(true).open(path) {
+            Ok(mut file) => {
+                return writeln!(file, "{}", std::process::id()).map_err(|error| {
+                    let _ = fs::remove_file(path);
+                    io_error("write AVD directory lock", path, error)
+                });
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                if !lock_owner_exited(path) {
+                    return Err(held());
                 }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    for path in &paths {
-                        let _ = fs::remove_file(path);
+                match fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(io_error("remove stale AVD directory lock", path, error))
                     }
-                    return Err(Error::new(
-                        ErrorCode::PreconditionFailed,
-                        format!("another write plan holds directory lock {}", path.display()),
-                    ));
-                }
-                Err(error) => {
-                    for path in &paths {
-                        let _ = fs::remove_file(path);
-                    }
-                    return Err(io_error("create AVD directory lock", &path, error));
                 }
             }
+            Err(error) => return Err(io_error("create AVD directory lock", path, error)),
         }
-        Ok(Self { paths })
     }
+    Err(held())
+}
+
+/// Only a lock whose recorded owner is known to have exited is reclaimed; an
+/// unreadable owner or an unsupported platform keeps the lock held.
+fn lock_owner_exited(path: &Path) -> bool {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| contents.trim().parse::<u32>().ok())
+        .is_some_and(|pid| matches!(platform::process_exists(pid), Ok(false)))
 }
 
 impl Drop for DirectoryLocks {
@@ -769,25 +688,56 @@ fn io_error(action: &str, path: &Path, error: io::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::{BoxFuture, ChildProcess};
     use model::{
         AndroidCliMetrics, CpuArchitecture, Field, HardwareConfig, Host, Package, PackageId,
-        Platform, PlatformPaths, ProfileId, Revision, ToolNames, ToolSource, ToolStatus,
+        Platform, PlatformPaths, ProfileId, Revision, ToolNames, ToolSource, ToolState, ToolStatus,
         ValueSource,
     };
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use process::CommandSpec;
+    use std::{
+        sync::atomic::{AtomicU64, Ordering},
+        time::Duration,
+    };
 
     static NEXT_ROOT: AtomicU64 = AtomicU64::new(1);
+
+    /// Plan execution never launches or signals processes; only command execution varies.
+    macro_rules! no_process_control {
+        () => {
+            fn spawn_detached(
+                &self,
+                _spec: CommandSpec,
+                _stdout_path: &Path,
+                _stderr_path: &Path,
+                _cancellation: &CancellationToken,
+            ) -> Result<Box<dyn ChildProcess>, Error> {
+                unreachable!("plan execution does not launch processes")
+            }
+
+            fn process_executable(&self, _pid: u32) -> Result<Option<PathBuf>, Error> {
+                Ok(None)
+            }
+
+            fn signal(&self, _pid: u32, _signal: platform::ProcessSignal) -> Result<(), Error> {
+                unreachable!("plan execution does not signal processes")
+            }
+        };
+    }
 
     struct FakeBackend {
         malformed_create: bool,
     }
 
     impl Backend for FakeBackend {
+        no_process_control!();
+
         fn execute<'a>(
             &'a self,
             invocation: drivers::Invocation,
             cancellation: &'a CancellationToken,
-        ) -> Pin<Box<dyn Future<Output = Result<process::Output, Error>> + Send + 'a>> {
+            _timeout: Duration,
+        ) -> BoxFuture<'a, Result<process::Output, Error>> {
             Box::pin(async move {
                 check_cancelled(cancellation)?;
                 match invocation.tool {
@@ -843,11 +793,14 @@ mod tests {
     }
 
     impl Backend for CancellingBackend {
+        no_process_control!();
+
         fn execute<'a>(
             &'a self,
             invocation: drivers::Invocation,
             cancellation: &'a CancellationToken,
-        ) -> Pin<Box<dyn Future<Output = Result<process::Output, Error>> + Send + 'a>> {
+            _timeout: Duration,
+        ) -> BoxFuture<'a, Result<process::Output, Error>> {
             Box::pin(async move {
                 if invocation.tool == drivers::Tool::Adb {
                     return Ok(process::Output {
@@ -1164,6 +1117,40 @@ mod tests {
         );
         assert!(std::iter::from_fn(|| receiver.try_recv().ok())
             .any(|event| matches!(event, Event::StepFinished { step, .. } if step == "delete")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_locks_use_stable_names_and_reclaim_locks_of_exited_owners() {
+        let root = temp_root("locks");
+        let key = format!("{}lock", model::test_avd_prefix());
+        let path = lock_path(&root, &key);
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            format!(".{PRODUCT_NAME}-{key}.lock")
+        );
+
+        let held = DirectoryLocks::acquire(&root, std::slice::from_ref(&key)).unwrap();
+        assert_eq!(
+            DirectoryLocks::acquire(&root, std::slice::from_ref(&key))
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::PreconditionFailed
+        );
+        drop(held);
+        assert!(!path.exists());
+
+        let mut exited = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        exited.wait().unwrap();
+        fs::write(&path, format!("{}\n", exited.id())).unwrap();
+        let reclaimed = DirectoryLocks::acquire(&root, std::slice::from_ref(&key)).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap().trim(),
+            std::process::id().to_string()
+        );
+        drop(reclaimed);
         fs::remove_dir_all(root).unwrap();
     }
 
