@@ -1,8 +1,3 @@
-- [UniFFI 与 Swift 6](#uniffi-与-swift-6)
-  - [Swift 6](#swift-6)
-  - [取消](#取消)
-  - [体积](#体积)
-
 # UniFFI 与 Swift 6
 
 验证环境：
@@ -48,8 +43,8 @@ UniFFI 生成的 Swift 代码与验证程序在以下设置下编译通过：
 
 - 未剥离的 Rust 静态库：19,849,984 bytes；
 - 剥离符号后的静态库：13,167,416 bytes；
-- 单切片 XCFramework：约 12.6 MiB；
+- 仅含 macOS arm64 切片的 XCFramework：约 12.6 MiB；
 - XCFramework ZIP：4,593,408 bytes；
 - 链接并执行验证逻辑的 Swift 可执行文件：1,036,136 bytes。
 
-这些数字是最小验证程序的基线，不代表完整 avdkit 的最终大小。加入领域模型、驱动和其他架构切片后需要重新测量。
+这些数字是最小验证程序的基线，不代表完整 avdkit 的最终大小。加入领域模型、驱动和其他实现后需要重新测量。

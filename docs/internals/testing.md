@@ -1,0 +1,87 @@
+# 测试
+
+公开基线同时约束编译器版本、Rust API、序列化格式、命令行行为和异步执行边界。它们共同保证调用方升级代码时，不会因为内部实现变化而静默得到不同的契约。
+
+## Rust 版本与发布边界
+
+workspace 的最低支持 Rust 版本是 1.80。常规 CI 在 macOS、Linux 和 Windows 上使用稳定版工具链执行格式检查、Clippy 和单元测试；独立的 Linux 作业使用 Rust 1.80 和锁文件运行整个 workspace 测试。这样既验证当前工具链，也防止依赖或语法无意中抬高最低版本。
+
+所有 package 都从 workspace 继承 `publish = false`。在正式名称确定前，`cargo publish` 因此不能把内部 crate 或出口误发到公共注册表；调用方只通过 Git 依赖使用仓库。
+
+## Rust API 文档
+
+Rust 调用方只依赖 `avdkit` 包。它重新导出的公共模型在 `model` crate 定义，因此 `core` 和 `model` 都启用 `missing_docs` 拒绝编译：
+
+- 类型说明其在稳定契约中的职责
+- 字段说明值的来源和语义
+- 枚举变体说明状态或操作的含义
+- 方法说明阻塞、异步、取消和返回值行为
+
+其他 crate 是内部实现层，不构成支持调用方直接依赖的 Rust API。平台层内部使用的类型因此定义在 `platform`，而不是 `model`。
+
+会增长的公开枚举标注 `#[non_exhaustive]`，新增变体只需次版本号，见[错误](../reference/errors.md)。workspace 内的出口在匹配这些枚举时需要通配分支；FFI 的映射规则见 [Swift](../guide/swift.md)。
+
+`Error` 把罕见且较大的 `diagnostic` 装箱，使结构保持在 128 字节以内。所有 crate 都不再关闭 Clippy 的 `result_large_err` 检查，`model` 中有测试固定这一上限。
+
+## JSON golden 契约
+
+公共模型的 golden 测试把确定的模型值格式化为 JSON，再和版本化文件逐字节比较。当前覆盖：
+
+- `CapabilityMatrix` 的可用与不可用状态
+- `Plan`、步骤和补偿
+- `Error`、失败步骤和底层诊断
+- CLI 使用 `Envelope<Error>` 输出的完整响应
+
+golden 文件会捕获字段改名、标签方式、字段顺序和结构层级变化。修改公共格式时必须显式更新 fixture，并同时判断是否需要调整 `SCHEMA_VERSION`。
+
+## CLI 进程级测试
+
+CLI 集成测试启动真实 `avdkit` 可执行文件，而不是只调用内部函数。测试覆盖：
+
+- 嵌套命令解析和成功 JSON 响应
+- Clap 用法错误返回退出码 `2`
+- 领域输入错误返回退出码 `2`
+- 计划创建、展示和显式审批
+- 长任务最终错误作为 NDJSON 最后一行输出
+
+查询成功响应写入 stdout，查询错误和诊断写入 stderr。长任务的事件和最终成功或错误全部写入 stdout，脚本只读取一条 NDJSON 流即可取得完整生命周期。
+
+## Blocking 边界
+
+环境探测和 AVD 文件扫描都包含同步文件系统调用。异步入口不直接在 Tokio worker 上执行这些调用：
+
+- `Kit::new_async()` 和 `Kit::refresh()` 通过异步进程层执行 shell 与工具探针，并用 blocking pool 完成平台和 SDK 文件探测
+- `Kit::list_devices()` 和 `Kit::get_device()` 使用 blocking pool 扫描和读取 AVD 文件
+- blocking 任务无法完成时统一映射为 `internal`
+
+同步的 `Kit::new()` 仍可供没有异步运行时的调用方使用，并明确在当前线程完成探测。异步应用和 CLI 使用 `Kit::new_async()`。
+
+## 设备文件单元测试
+
+单元测试只在临时目录中创建带 `test_avd_prefix()` 派生前缀的 AVD 索引和配置。测试覆盖自定义路径、`path.rel` 解析、字段映射、稳定排序、空目录、设备不存在以及索引缺少路径。测试结束后删除临时目录，不读取或修改用户现有 AVD。
+
+## macOS arm64 集成测试
+
+真实 Android 工具链测试默认不运行。设置 `AVDKIT_INTEGRATION=1` 后，`avdkit` crate 的集成测试会使用本机 Android CLI、emulator、adb 和一个已经安装的、与主机 ABI 匹配的系统镜像：
+
+```sh
+AVDKIT_INTEGRATION=1 cargo test -p avdkit --test macos_arm64_integration -- --nocapture
+```
+
+测试为 `ANDROID_USER_HOME` 和 `ANDROID_AVD_HOME` 创建独立临时目录，不读写调用方已有 AVD。Android CLI 当前忽略单独设置的 `ANDROID_AVD_HOME`，因此测试必须同时隔离用户目录；隔离目录只链接原用户目录中的 CLI bundle 与首次运行状态，避免重复下载或再次显示条款。设备 ID 和临时目录均使用由品牌常量派生的测试前缀。
+
+一次测试顺序验证：
+
+1. 查询 Android CLI 预设机型和已安装系统镜像
+2. 阻断事务备份目录，确认真实 Android CLI 已创建临时 AVD 后的文件事务失败会执行补偿且不留残余
+3. 编译并执行正常创建计划
+4. 通过文件入口重新读取设备
+5. 启动模拟器并等待 adb 与 Android 服务就绪
+6. 重复启动，验证幂等返回已有实例
+7. 停止模拟器并确认离线
+8. 重复停止，验证幂等成功
+9. 删除 AVD 并确认设备查询返回 `device_not_found`
+
+测试作用域退出时还会按 AVD ID 查找并停止残留 emulator，再删除隔离目录。CLI 的 `devices cleanup-tests --approve` 可清扫默认 Android 用户目录中所有带测试前缀的残留 AVD；它会先幂等停止，再删除每个设备。
+
+测试只消费已经安装的系统镜像，不隐式下载、不接受许可协议。没有兼容镜像时测试会明确失败并提示先安装镜像，避免常规集成测试意外产生数 GB 网络流量。
