@@ -36,6 +36,8 @@ UniFFI 生成的 Swift async 桥接不会自动传播 `Task.cancel()`。必须�
 
 ## XCFramework 与 SwiftPM
 
-`scripts/build-swift.sh` 固定构建 `aarch64-apple-darwin` 静态库，生成 Swift 绑定并创建只包含 macOS arm64 切片的 `AvdkitFFI.xcframework`。脚本用 `lipo` 拒绝包含其他架构的产物，再执行 Swift 包测试和取消链验证。
+绑定生成器在 `swift/bindgen/`。它是独立的 Cargo 包，不加入主 workspace，也不链进静态库；包本身只包装 UniFFI 命令行入口，UniFFI 版本与 `avdkit-ffi` 相同。
 
-`swift/Package.swift` 的 binary target 使用本地 `swift/Artifacts/AvdkitFFI.xcframework`。产物不进入版本控制；正式名称和发布地址确定前不引用公共制品仓库。
+`scripts/build-swift.sh` 先构建这个生成器，再根据 `avdkit-ffi` 的动态库生成 Swift 绑定，并创建只包含 macOS arm64 切片的 `AvdkitFFI.xcframework`。生成的 `swift/Sources/Avdkit/Generated.swift` 与 XCFramework 都是构建产物，不进入版本控制。脚本固定构建 `aarch64-apple-darwin` 静态库，用 `lipo` 拒绝包含其他架构的产物，再执行 Swift 包测试和取消链验证。
+
+`swift/Package.swift` 的 binary target 使用本地 `swift/Artifacts/AvdkitFFI.xcframework`。正式名称和发布地址确定前不引用公共制品仓库。

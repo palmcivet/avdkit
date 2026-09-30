@@ -20,7 +20,7 @@ fi
 
 cd "$ROOT"
 export CARGO_TARGET_DIR="$TARGET"
-cargo build --manifest-path "$ROOT/tools/swift-bindgen/Cargo.toml" --release --locked
+cargo build --manifest-path "$ROOT/swift/Bindgen/Cargo.toml" --release --locked
 cargo build -p avdkit-ffi --release --target "$TRIPLE" --lib --locked
 
 rm -rf "$GENERATED" "$HEADERS" "$XCFRAMEWORK"

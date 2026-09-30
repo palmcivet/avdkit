@@ -1,6 +1,3 @@
 target/
-.build/
-.swiftpm/
 *.swp
 .DS_Store
-swift/Artifacts/
