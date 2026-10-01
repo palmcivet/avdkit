@@ -304,13 +304,35 @@ mod tests {
 
     #[test]
     fn reports_the_executable_of_a_live_process_and_none_after_exit() {
-        let mut child = Command::new("/bin/sleep")
+        let program = ["/bin/sleep", "/usr/bin/sleep"]
+            .into_iter()
+            .find(|path| std::path::Path::new(path).is_file())
+            .expect("sleep is installed");
+        let expected_name = std::path::Path::new(program).file_name().unwrap();
+        let mut child = Command::new(program)
             .arg("120")
             .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let executable = process_executable(child.id()).unwrap().unwrap();
-        assert_eq!(executable.file_name().unwrap(), "sleep");
+
+        // spawn can return before proc_pidpath or /proc reports the new image.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("sleep exited before its executable could be read: {status}");
+            }
+            match process_executable(child.id()).unwrap() {
+                Some(executable) if executable.file_name() == Some(expected_name) => break,
+                Some(executable) if Instant::now() >= deadline => {
+                    panic!("pid {} executable was {}", child.id(), executable.display());
+                }
+                None if Instant::now() >= deadline => panic!("process disappeared"),
+                _ => thread::sleep(Duration::from_millis(20)),
+            }
+        }
+
         child.kill().unwrap();
         child.wait().unwrap();
         assert_eq!(process_executable(child.id()).unwrap(), None);
