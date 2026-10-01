@@ -69,11 +69,10 @@ pub fn describe_with_environment(environment: &BTreeMap<String, String>) -> Desc
     let host = current_host();
     let home = environment
         .get("HOME")
-        .or_else(|| environment.get("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let sdk_root = default_sdk_root(&host, &home, environment);
+    let sdk_root = default_sdk_root(&host, &home);
     let user_root = environment
         .get("ANDROID_USER_HOME")
         .map(PathBuf::from)
@@ -92,7 +91,7 @@ pub fn describe_with_environment(environment: &BTreeMap<String, String>) -> Desc
             runtime_root: runtime_root(&host, &home, environment),
             data_root: default_data_root(&host, &home, environment),
         },
-        tools: tool_names(&host),
+        tools: tool_names(),
     }
 }
 
@@ -132,7 +131,6 @@ fn runtime_architecture() -> CpuArchitecture {
         .and_then(|output| String::from_utf8(output.stdout).ok())
         .map(|value| value.trim().to_owned());
     let architecture = command_architecture
-        .or_else(|| std::env::var("PROCESSOR_ARCHITECTURE").ok())
         .unwrap_or_else(|| std::env::consts::ARCH.to_owned())
         .to_ascii_lowercase();
     match architecture.as_str() {
@@ -142,19 +140,9 @@ fn runtime_architecture() -> CpuArchitecture {
     }
 }
 
-fn default_sdk_root(
-    host: &Host,
-    home: &std::path::Path,
-    environment: &BTreeMap<String, String>,
-) -> PathBuf {
+fn default_sdk_root(host: &Host, home: &std::path::Path) -> PathBuf {
     match host.platform {
         Platform::MacOs => home.join("Library/Android/sdk"),
-        Platform::Linux => home.join("Android/Sdk"),
-        Platform::Windows => environment
-            .get("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.to_path_buf())
-            .join("Android/Sdk"),
         _ => home.join("Android/Sdk"),
     }
 }
@@ -170,12 +158,6 @@ fn runtime_root(
             .get("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".cache"))
-            .join("avd/running"),
-        Platform::Windows => environment
-            .get("TEMP")
-            .or_else(|| environment.get("TMP"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join("AppData/Local/Temp"))
             .join("avd/running"),
         _ => home.join(".cache/avd/running"),
     }
@@ -195,31 +177,16 @@ fn default_data_root(
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".local/share"))
             .join(model::PRODUCT_NAME),
-        Platform::Windows => environment
-            .get("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.to_path_buf())
-            .join(model::PRODUCT_NAME),
         _ => home.join(".local/share").join(model::PRODUCT_NAME),
     }
 }
 
-fn tool_names(host: &Host) -> ToolNames {
-    let executable_suffix = if matches!(host.platform, Platform::Windows) {
-        ".exe"
-    } else {
-        ""
-    };
-    let script_suffix = if matches!(host.platform, Platform::Windows) {
-        ".bat"
-    } else {
-        ""
-    };
+fn tool_names() -> ToolNames {
     ToolNames {
-        android: format!("android{script_suffix}"),
-        adb: format!("adb{executable_suffix}"),
-        emulator: format!("emulator{executable_suffix}"),
-        sdkmanager: format!("sdkmanager{script_suffix}"),
-        avdmanager: format!("avdmanager{script_suffix}"),
+        android: "android".into(),
+        adb: "adb".into(),
+        emulator: "emulator".into(),
+        sdkmanager: "sdkmanager".into(),
+        avdmanager: "avdmanager".into(),
     }
 }

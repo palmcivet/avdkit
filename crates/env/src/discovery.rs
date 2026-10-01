@@ -16,8 +16,6 @@ use process::{CommandSpec, Runner};
 const RELEVANT_ENVIRONMENT: &[&str] = &[
     "PATH",
     "HOME",
-    "USERPROFILE",
-    "LOCALAPPDATA",
     "XDG_DATA_HOME",
     "ANDROID_SDK_ROOT",
     "ANDROID_HOME",

@@ -4,7 +4,7 @@
 
 ## 前置条件
 
-当前可执行的领域操作只覆盖 **macOS arm64**。其他平台可以编译、探测环境并返回能力矩阵，但领域能力会包含 `platform_not_supported`。
+当前可执行的领域操作只覆盖 **macOS arm64**。Linux 可以编译、探测环境并返回能力矩阵，但领域能力会包含 `platform_not_supported`。不支持 Windows。
 
 本机需要：
 

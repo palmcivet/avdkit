@@ -1,0 +1,34 @@
+name: Swift release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic version (MAJOR.MINOR.PATCH)
+        required: true
+        type: string
+
+concurrency:
+  group: swift-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Publish Swift package
+        env:
+          VERSION: ${{ inputs.version }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GH_TOKEN: ${{ github.token }}
+        run: swift/release.sh "$VERSION" --publish

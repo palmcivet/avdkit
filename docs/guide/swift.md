@@ -34,10 +34,45 @@ UniFFI 生成的 Swift async 桥接不会自动传播 `Task.cancel()`。必须�
 
 验证程序使用临时 SDK 和真实 shell 进程模拟 Android CLI 创建命令。它通过生成的 `Kit` 和 `Operation` 发起计划、取消 Swift Task，并确认 Rust 进程组中的 shell 与子进程都退出，不只依赖独立的 UniFFI 实验。
 
-## XCFramework 与 SwiftPM
+## 构建
 
-绑定生成器在 `swift/bindgen/`。它是独立的 Cargo 包，不加入主 workspace，也不链进静态库；包本身只包装 UniFFI 命令行入口，UniFFI 版本与 `avdkit-ffi` 相同。
+`swift/` 是 Swift 出口的目录，放着本地清单、手写源码、测试、绑定生成器和构建脚本。绑定生成器在 `swift/bindgen/`。它是独立的 Cargo 包，不加入主 workspace，也不链进静态库；包本身只包装 UniFFI 命令行入口，UniFFI 版本与 `avdkit-ffi` 相同。
 
-`scripts/build-swift.sh` 先构建这个生成器，再根据 `avdkit-ffi` 的动态库生成 Swift 绑定，并创建只包含 macOS arm64 切片的 `AvdkitFFI.xcframework`。生成的 `swift/Sources/Avdkit/Generated.swift` 与 XCFramework 都是构建产物，不进入版本控制。脚本固定构建 `aarch64-apple-darwin` 静态库，用 `lipo` 拒绝包含其他架构的产物，再执行 Swift 包测试和取消链验证。
+`swift/build.sh` 先构建这个生成器，再根据 `avdkit-ffi` 的动态库生成 Swift 绑定，并创建只包含 macOS arm64 切片的 `AvdkitFFI.xcframework`。生成的 `swift/Sources/Avdkit/Generated.swift` 与 XCFramework 都留在本机，不进入版本控制。脚本固定构建 `aarch64-apple-darwin` 静态库，用 `lipo` 拒绝包含其他架构的产物，再执行 Swift 包测试和取消链验证。
 
-`swift/Package.swift` 的 binary target 使用本地 `swift/Artifacts/AvdkitFFI.xcframework`。正式名称和发布地址确定前不引用公共制品仓库。
+未设置 `DEVELOPER_DIR` 时，构建、打包和发布脚本选择本机 Swift 工具链不低于 6.0 的 Xcode。macOS 14 的 GitHub runner 把默认 `Xcode.app` 指到 15.4（Swift 5.10）；Swift 6 在同镜像并列安装的 Xcode 16 里。
+
+`swift/Package.swift` 把 binary target 指到本地 `swift/Artifacts/AvdkitFFI.xcframework`，只给这次构建和持续集成用。
+
+## 发布与引入
+
+`swift/release.sh <version>` 调用 `swift/build.sh` 和 `swift/package.sh`。zip 地址由 `GITHUB_REPOSITORY` 或 `origin` 组成：`https://github.com/<owner>/<repo>/releases/download/<version>/AvdkitFFI.xcframework.zip`。`package.sh` 把该地址和校验和写入 `target/swift-package/`，其中只有清单、生成的绑定和手写的取消适配。
+
+加上 `--publish` 时，脚本用临时索引把这棵树提交到 `release/swift`。分支尚不存在时，这次提交没有父提交；否则父提交是该分支的远端顶端。提交打上与版本号相同的附注标签，并快进推送。zip 和校验和文件挂到该标签的 GitHub Release。推送后脚本下载 Release 里的 zip，复核校验和，再用这个标签完成一次 Swift 构建。
+
+版本号是 `MAJOR.MINOR.PATCH`。同名标签已存在时脚本拒绝覆盖。开发分支的 `swift/Package.swift` 仍指向本地 XCFramework，URL 不写入开发分支。
+
+GitHub Actions 工作流 Swift release 在 macOS 14 上手动执行 `swift/release.sh <version> --publish`。
+
+调用方依赖本仓库的版本标签。`package` 是仓库名的小写形式，产品名是 `Avdkit`：
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/<owner>/<repo>", from: "0.1.0"),
+],
+targets: [
+    .target(
+        name: "App",
+        dependencies: [
+            .product(name: "Avdkit", package: "<仓库名>"),
+        ]
+    ),
+]
+```
+
+```swift
+import Avdkit
+
+let kit = try Kit(config: defaultKitConfig())
+let report = try await kit.environment()
+```

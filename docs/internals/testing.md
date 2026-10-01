@@ -4,7 +4,7 @@
 
 ## Rust 版本与发布边界
 
-workspace 的最低支持 Rust 版本是 1.80。常规 CI 在 macOS、Linux 和 Windows 上使用稳定版工具链执行格式检查、Clippy 和单元测试；独立的 Linux 作业使用 Rust 1.80 和锁文件运行整个 workspace 测试。这样既验证当前工具链，也防止依赖或语法无意中抬高最低版本。
+workspace 的最低支持 Rust 版本是 1.80。常规 CI 在 macOS 和 Linux 上使用稳定版工具链执行格式检查、Clippy 和单元测试；独立的 Linux 作业使用 Rust 1.80 和锁文件运行整个 workspace 测试。这样既验证当前工具链，也防止依赖或语法无意中抬高最低版本。不在 Windows 上编译或测试。
 
 所有 package 都从 workspace 继承 `publish = false`。在正式名称确定前，`cargo publish` 因此不能把内部 crate 或出口误发到公共注册表；调用方只通过 Git 依赖使用仓库。
 
