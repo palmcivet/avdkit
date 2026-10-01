@@ -53,10 +53,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Applications/Xcode.app/Contents/Developer ]; then
-    DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-    export DEVELOPER_DIR
-fi
+# shellcheck source=xcode.sh
+. "$ROOT/swift/xcode.sh"
 
 cd "$ROOT"
 

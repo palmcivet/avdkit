@@ -13,10 +13,8 @@ LIBRARY="$RELEASE/libavdkit_ffi.a"
 DYLIB="$RELEASE/libavdkit_ffi.dylib"
 GENERATOR="$TARGET/release/swift-bindgen"
 
-if [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Applications/Xcode.app/Contents/Developer ]; then
-    DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-    export DEVELOPER_DIR
-fi
+# shellcheck source=xcode.sh
+. "$ROOT/swift/xcode.sh"
 
 cd "$ROOT"
 export CARGO_TARGET_DIR="$TARGET"

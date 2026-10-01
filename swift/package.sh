@@ -15,10 +15,8 @@ CONVENIENCE="$ROOT/swift/Sources/Avdkit/Operation+AsyncSequence.swift"
 DIST="$TARGET/swift-package"
 ZIP="$TARGET/AvdkitFFI.xcframework.zip"
 
-if [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Applications/Xcode.app/Contents/Developer ]; then
-    DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-    export DEVELOPER_DIR
-fi
+# shellcheck source=xcode.sh
+. "$ROOT/swift/xcode.sh"
 
 if [ ! -d "$XCFRAMEWORK" ] || [ ! -f "$GENERATED" ] || [ ! -f "$CONVENIENCE" ]; then
     echo "missing Swift build output; run swift/build.sh first" >&2
