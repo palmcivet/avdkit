@@ -11,8 +11,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "AvdkitFFI",
-            url: "https://github.com/palmcivet/avdkit/releases/download/0.0.1/AvdkitFFI.xcframework.zip",
-            checksum: "fcf39a989bcfc10eccc307bd3472c5e6252910cfc00bf524d913410156136862"
+            url: "https://github.com/palmcivet/avdkit/releases/download/0.0.2/AvdkitFFI.xcframework.zip",
+            checksum: "31366989e1c404b798bbd657301d65c2e5050af2e8c903a1b734f0f2c5a0e5b5"
         ),
         .target(
             name: "Avdkit",
