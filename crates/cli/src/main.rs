@@ -497,7 +497,8 @@ mod tests {
             vec![Reason::not_implemented()],
         );
         let actual = format!("{}\n", render_json(&Envelope::new(error)));
-        assert_eq!(actual, include_str!("../tests/golden/error-response.json"));
+        let expected = include_str!("../tests/golden/error-response.json").replace("\r\n", "\n");
+        assert_eq!(actual, expected);
     }
 
     #[test]

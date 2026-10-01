@@ -32,7 +32,7 @@ Rust 调用方只依赖 `avdkit` 包。它重新导出的公共模型在 `model`
 - `Error`、失败步骤和底层诊断
 - CLI 使用 `Envelope<Error>` 输出的完整响应
 
-golden 文件会捕获字段改名、标签方式、字段顺序和结构层级变化。修改公共格式时必须显式更新 fixture，并同时判断是否需要调整 `SCHEMA_VERSION`。
+golden 文件会捕获字段改名、标签方式、字段顺序和结构层级变化。修改公共格式时必须显式更新 fixture，并同时判断是否需要调整 `SCHEMA_VERSION`。这些文件在仓库中使用 LF。`.gitattributes` 把 `*.json` 的检出换行固定为 LF；比较时去掉 `\r`，已经按 CRLF 检出的工作区仍然和序列化结果一致。
 
 ## CLI 进程级测试
 
