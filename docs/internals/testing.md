@@ -4,7 +4,7 @@
 
 ## Rust 版本与发布边界
 
-workspace 的最低支持 Rust 版本是 1.80。常规 CI 在 macOS、Linux 和 Windows 上使用稳定版工具链执行格式检查、Clippy 和单元测试；独立的 Linux 作业使用 Rust 1.80 和锁文件运行整个 workspace 测试。这样既验证当前工具链，也防止依赖或语法无意中抬高最低版本。
+workspace 的最低支持 Rust 版本是 1.80。常规 CI 在 macOS 和 Linux 上使用稳定版工具链执行格式检查、Clippy 和单元测试；独立的 Linux 作业使用 Rust 1.80 和锁文件运行整个 workspace 测试。这样既验证当前工具链，也防止依赖或语法无意中抬高最低版本。不在 Windows 上编译或测试。
 
 所有 package 都从 workspace 继承 `publish = false`。在正式名称确定前，`cargo publish` 因此不能把内部 crate 或出口误发到公共注册表；调用方只通过 Git 依赖使用仓库。
 
@@ -32,7 +32,7 @@ Rust 调用方只依赖 `avdkit` 包。它重新导出的公共模型在 `model`
 - `Error`、失败步骤和底层诊断
 - CLI 使用 `Envelope<Error>` 输出的完整响应
 
-golden 文件会捕获字段改名、标签方式、字段顺序和结构层级变化。修改公共格式时必须显式更新 fixture，并同时判断是否需要调整 `SCHEMA_VERSION`。这些文件在仓库中使用 LF。`.gitattributes` 把 `*.json` 的检出换行固定为 LF；比较时去掉 `\r`，已经按 CRLF 检出的工作区仍然和序列化结果一致。
+golden 文件会捕获字段改名、标签方式、字段顺序和结构层级变化。修改公共格式时必须显式更新 fixture，并同时判断是否需要调整 `SCHEMA_VERSION`。
 
 ## CLI 进程级测试
 

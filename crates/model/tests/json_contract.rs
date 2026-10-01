@@ -8,7 +8,7 @@ use thiserror as _;
 
 fn assert_golden<T: Serialize>(value: &T, expected: &str) {
     let actual = format!("{}\n", serde_json::to_string_pretty(value).unwrap());
-    assert_eq!(actual, expected.replace("\r\n", "\n"));
+    assert_eq!(actual, expected);
 }
 
 #[test]

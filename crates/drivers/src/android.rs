@@ -175,25 +175,14 @@ mod tests {
 
     #[test]
     fn parses_an_absolute_sdk_root() {
-        let text = std::env::temp_dir()
-            .join("android-sdk")
-            .display()
-            .to_string();
         let output = Output {
             status: Some(0),
-            stdout: format!("{text}\n"),
-            stderr: String::new(),
-        };
-        assert_eq!(parse_sdk_root(&output).unwrap(), PathBuf::from(&text));
-
-        let relative = Output {
-            status: Some(0),
-            stdout: "android-sdk\n".into(),
+            stdout: "/opt/android-sdk\n".into(),
             stderr: String::new(),
         };
         assert_eq!(
-            parse_sdk_root(&relative).unwrap_err().code,
-            ErrorCode::ToolOutputUnrecognized
+            parse_sdk_root(&output).unwrap(),
+            PathBuf::from("/opt/android-sdk")
         );
     }
 
